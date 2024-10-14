@@ -6082,7 +6082,7 @@
 			)
 		)
 	)
-	(global_label "D11"
+	(global_label "MOSI"
 		(shape input)
 		(at 67.31 153.67 0)
 		(fields_autoplaced yes)
@@ -6094,7 +6094,7 @@
 		)
 		(uuid "1f2a8d70-abd4-42b3-b484-2ef7c6d75991")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 73.9842 153.67 0)
+			(at 74.8914 153.67 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6148,7 +6148,7 @@
 			)
 		)
 	)
-	(global_label "D12"
+	(global_label "MOSI"
 		(shape input)
 		(at 229.87 113.03 0)
 		(fields_autoplaced yes)
@@ -6160,7 +6160,7 @@
 		)
 		(uuid "2c5ae80e-7fa4-4974-81a7-7256c83037ed")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 236.5442 113.03 0)
+			(at 237.4514 113.03 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6566,7 +6566,7 @@
 			)
 		)
 	)
-	(global_label "D12"
+	(global_label "MISO"
 		(shape input)
 		(at 67.31 151.13 0)
 		(fields_autoplaced yes)
@@ -6578,7 +6578,7 @@
 		)
 		(uuid "67c9132b-ed43-46ff-b330-b022910f0a6a")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 73.9842 151.13 0)
+			(at 74.8914 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7204,7 +7204,7 @@
 			)
 		)
 	)
-	(global_label "D11"
+	(global_label "MISO"
 		(shape input)
 		(at 240.03 44.45 180)
 		(fields_autoplaced yes)
@@ -7216,7 +7216,7 @@
 		)
 		(uuid "c18fd51a-fa14-4eb3-b378-3af7d320b0f5")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 233.3558 44.45 0)
+			(at 232.4486 44.45 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7226,7 +7226,7 @@
 			)
 		)
 	)
-	(global_label "D12"
+	(global_label "MOSI"
 		(shape input)
 		(at 271.78 49.53 0)
 		(fields_autoplaced yes)
@@ -7238,7 +7238,7 @@
 		)
 		(uuid "c2f90ab2-e800-4faa-bc93-3e19bedd35de")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 278.4542 49.53 0)
+			(at 279.3614 49.53 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7556,7 +7556,7 @@
 			)
 		)
 	)
-	(global_label "D11"
+	(global_label "MOSI"
 		(shape input)
 		(at 133.35 153.67 0)
 		(fields_autoplaced yes)
@@ -7568,7 +7568,7 @@
 		)
 		(uuid "e46d1c38-6737-4f11-bbdd-7ad2e8d16b62")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 140.0242 153.67 0)
+			(at 140.9314 153.67 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7644,7 +7644,7 @@
 			)
 		)
 	)
-	(global_label "D11"
+	(global_label "MISO"
 		(shape input)
 		(at 229.87 118.11 0)
 		(fields_autoplaced yes)
@@ -7656,7 +7656,7 @@
 		)
 		(uuid "ed4fe64d-7f43-4154-8b10-8b5092b5c32b")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 236.5442 118.11 0)
+			(at 237.4514 118.11 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7710,7 +7710,7 @@
 			)
 		)
 	)
-	(global_label "D12"
+	(global_label "MISO"
 		(shape input)
 		(at 133.35 151.13 0)
 		(fields_autoplaced yes)
@@ -7722,7 +7722,7 @@
 		)
 		(uuid "f7003dfa-10c3-4445-bc6d-317506508580")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 140.0242 151.13 0)
+			(at 140.9314 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8174,7 +8174,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal"
+		(property "Footprint" "Resistor_THT:R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal"
 			(at 175.26 36.068 90)
 			(effects
 				(font
@@ -9040,7 +9040,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm"
+		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric_Pad1.33x1.80mm_HandSolder"
 			(at 267.6652 133.35 0)
 			(effects
 				(font
@@ -9383,7 +9383,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm"
+		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric_Pad1.33x1.80mm_HandSolder"
 			(at 249.2248 115.57 0)
 			(effects
 				(font
@@ -9510,7 +9510,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "0.1nF"
+		(property "Value" "100 nF"
 			(at 267.97 36.8299 0)
 			(effects
 				(font
@@ -9588,7 +9588,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric_Pad1.18x1.45mm_HandSolder"
 			(at 160.9852 45.72 0)
 			(effects
 				(font
@@ -10271,7 +10271,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm"
+		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric_Pad1.33x1.80mm_HandSolder"
 			(at 267.6652 147.32 0)
 			(effects
 				(font
@@ -10646,7 +10646,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm"
+		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric_Pad1.33x1.80mm_HandSolder"
 			(at 246.0752 139.7 0)
 			(effects
 				(font
