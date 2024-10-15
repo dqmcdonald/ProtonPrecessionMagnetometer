@@ -43,36 +43,54 @@ October 2024
 
 
 // Pin definitions
-#define PUSHUTTON_PIN     2
-#define COIL_PIN          4
-#define LED_RED_PIN       5
-#define LED_BLUE_PIN      6
-#define BUSY_PIN          7
-#define ADC_RD_PIN        8
-#define LED_GREEN_PIN      9
-#define SRAM_CS_PIN      10
-#define SPI_MISO_PIN     11
-#define SPI_MOSI_PIN     12
-#define SPI_CLOCK_PIN    13
+#define PUSHBUTTON_PIN 2
+#define COIL_PIN 4
+#define LED_RED_PIN 5
+#define LED_BLUE_PIN 6
+#define BUSY_PIN 7
+#define ADC_RD_PIN 8
+#define LED_GREEN_PIN 9
+#define SRAM_CS_PIN 10
+#define SPI_MISO_PIN 11
+#define SPI_MOSI_PIN 12
+#define SPI_CLOCK_PIN 13
 
-
+int coil_activation_time = 6000;  // Time coil will be on in milliseconds
 
 
 void setup() {
   // put your setup code here, to run once:
 
-//LED: Start with Green
+  //LED: Start with Green
   pinMode(LED_RED_PIN, OUTPUT);
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_BLUE_PIN, OUTPUT);
-  digitalWrite(LED_RED_PIN, LOW);
-  digitalWrite(LED_GREEN_PIN, HIGH);
-  digitalWrite(LED_BLUE_PIN, LOW);
+  setRGBLEDColor(50, 200, 50);
 
+  // Pushbutton:
+  pinMode(PUSHBUTTON_PIN, INPUT);
+  digitalWrite(PUSHBUTTON_PIN, HIGH);  // Pull up resistor
 
+  // Coil MOSFET Gate pin:
+  pinMode(COIL_PIN, OUTPUT);
+  digitalWrite(COIL_PIN, HIGH);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  if (digitalRead(PUSHBUTTON_PIN) == LOW) {
+    setRGBLEDColor(200, 50, 30);
+    digitalWrite(COIL_PIN, LOW);
 
+    delay(coil_activation_time);
+
+    digitalWrite(COIL_PIN, HIGH);
+    setRGBLEDColor(50, 200, 50);
+  }
+}
+
+void setRGBLEDColor(int r, int g, int b) {
+
+  analogWrite(LED_RED_PIN, r);
+  analogWrite(LED_GREEN_PIN, g);
+  analogWrite(LED_BLUE_PIN, b);
 }
