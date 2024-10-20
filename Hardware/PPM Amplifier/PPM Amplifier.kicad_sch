@@ -3345,6 +3345,12 @@
 		(uuid "a5c3b824-e6b2-456f-b06d-901efb53cd07")
 	)
 	(junction
+		(at 52.07 120.65)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "ac2fd8d1-83ea-462b-8e4d-2b6d5c4d90f2")
+	)
+	(junction
 		(at 39.37 39.37)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3548,6 +3554,16 @@
 	)
 	(wire
 		(pts
+			(xy 74.93 113.03) (xy 81.28 113.03)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0755e96e-9fd2-4afe-b624-ad37ab9952cb")
+	)
+	(wire
+		(pts
 			(xy 163.83 45.72) (xy 165.1 45.72)
 		)
 		(stroke
@@ -3645,6 +3661,16 @@
 			(type default)
 		)
 		(uuid "11959ad6-8599-4181-a556-848aa67b129e")
+	)
+	(wire
+		(pts
+			(xy 52.07 113.03) (xy 67.31 113.03)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "12b5b562-f126-4656-a3eb-272b0b204876")
 	)
 	(wire
 		(pts
@@ -4708,7 +4734,7 @@
 	)
 	(wire
 		(pts
-			(xy 48.26 120.65) (xy 55.88 120.65)
+			(xy 48.26 120.65) (xy 52.07 120.65)
 		)
 		(stroke
 			(width 0)
@@ -4775,6 +4801,16 @@
 			(type default)
 		)
 		(uuid "beb4a154-9987-408a-931b-006183f192f5")
+	)
+	(wire
+		(pts
+			(xy 52.07 120.65) (xy 52.07 113.03)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bf561e7f-833f-4d24-8510-cffe5c381f47")
 	)
 	(wire
 		(pts
@@ -4885,6 +4921,16 @@
 			(type default)
 		)
 		(uuid "d157b7b9-30b8-4244-9497-ccabf919b05b")
+	)
+	(wire
+		(pts
+			(xy 52.07 120.65) (xy 55.88 120.65)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d214703b-fd1f-45b5-93e6-76a36b97ed6c")
 	)
 	(wire
 		(pts
@@ -5380,6 +5426,28 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+				(hide yes)
+			)
+		)
+	)
+	(global_label "GND"
+		(shape input)
+		(at 81.28 115.57 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "845f0a86-3bb4-4ac2-8792-47e807724ef1")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 74.4243 115.57 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 				(hide yes)
 			)
 		)
@@ -7602,6 +7670,76 @@
 		)
 	)
 	(symbol
+		(lib_id "Connector_Generic:Conn_01x02")
+		(at 86.36 113.03 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "cb2e2c3c-c3d2-4626-9d73-270833f50d48")
+		(property "Reference" "J6"
+			(at 88.9 113.0299 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Power LED"
+			(at 88.9 115.5699 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_2x01_P2.54mm_Vertical"
+			(at 86.36 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 86.36 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 86.36 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "f91359da-17bf-44d8-8cd5-846ea280eca4")
+		)
+		(pin "1"
+			(uuid "d1d7d57e-032e-4083-a34e-2cd0675cafb6")
+		)
+		(instances
+			(project ""
+				(path "/71271447-3e13-4e74-82de-a98e46237cb4"
+					(reference "J6")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 71.12 92.71 90)
 		(unit 1)
@@ -7618,7 +7756,7 @@
 				)
 			)
 		)
-		(property "Value" "0.022uF"
+		(property "Value" "0.0022uF"
 			(at 76.962 91.186 90)
 			(effects
 				(font
@@ -7952,6 +8090,74 @@
 			(project ""
 				(path "/71271447-3e13-4e74-82de-a98e46237cb4"
 					(reference "U3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 71.12 113.03 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ed169c19-668e-49de-8d71-9aab8cb5f203")
+		(property "Reference" "R5"
+			(at 71.12 106.68 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "330 Ohm"
+			(at 71.12 109.22 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
+			(at 71.12 114.808 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 71.12 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 71.12 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "0a6596c5-99ee-4ca3-950a-547b68ffe5c6")
+		)
+		(pin "1"
+			(uuid "d271dbe1-9dd0-4789-ac8b-27ad536ce4f8")
+		)
+		(instances
+			(project ""
+				(path "/71271447-3e13-4e74-82de-a98e46237cb4"
+					(reference "R5")
 					(unit 1)
 				)
 			)
