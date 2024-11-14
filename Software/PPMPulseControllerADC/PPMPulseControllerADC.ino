@@ -3,7 +3,7 @@ Arduino sketch for Proton Precession Magnetometer Pulse Controller
 
 Arduino receives instructions and sends data via Serial connection from RaspberryPi Zero 2 W 
 
-PPM Coil is energiesed by turning pin 4 high, this makes the voltage on the MOSETS go low via an optocoupler
+PPM Coil is energiesed by turning pin 4 low, this makes the voltage on the MOSETS go low via an optocoupler
 
 One coil is turned off there is a brief delay, then the ADC is used sample the signal from the sensor coils.
 For speed each sample is stored in the external SPI 1MB SRAM chip
@@ -39,7 +39,7 @@ October 2024
 */
 // Includes
 #include <SPI.h>
-
+#include <Bounce2.h>
 
 
 // Pin definitions
@@ -55,11 +55,28 @@ October 2024
 #define SPI_MOSI_PIN 12
 #define SPI_CLOCK_PIN 13
 
-int coil_activation_time = 6000;  // Time coil will be on in milliseconds
+
+// INSTANTIATE A Button OBJECT
+Bounce2::Button button = Bounce2::Button();
+
+// Buffer for serial comms
+const int SERIAL_BUFF_LEN = 32;
+char serial_buff[SERIAL_BUFF_LEN];
+
+
+// Flag to indicate if a measurement should be taken
+bool do_measurement = false;
+
+// Parameters
+int coil_activation_time = 6000;  // Time coil will be on (ms)
+int sample_delay = 500;           // Wait time before sampling data (ms)
+int cool_down_period = 10000;     // Delay before next cycle of activation
+int sample_rate = 20000;          // Sample rate (samples/s)
+int sample_time = 2000;           // Time sample will be on (ms)
 
 
 void setup() {
-  // put your setup code here, to run once:
+  Serial.begin(19200);
 
   //LED: Start with Green
   pinMode(LED_RED_PIN, OUTPUT);
@@ -68,29 +85,167 @@ void setup() {
   setRGBLEDColor(50, 200, 50);
 
   // Pushbutton:
-  pinMode(PUSHBUTTON_PIN, INPUT);
-  digitalWrite(PUSHBUTTON_PIN, HIGH);  // Pull up resistor
+  button.attach(PUSHBUTTON_PIN, INPUT_PULLUP);  // USE INTERNAL PULL-UP
+  // DEBOUNCE INTERVAL IN MILLISECONDS
+  button.interval(5);
+  // INDICATE THAT THE LOW STATE CORRESPONDS TO PHYSICALLY PRESSING THE BUTTON
+  button.setPressedState(LOW);
+
+
 
   // Coil MOSFET Gate pin:
   pinMode(COIL_PIN, OUTPUT);
   digitalWrite(COIL_PIN, HIGH);
+  Serial.println("Setup Done");
 }
 
 void loop() {
-  if (digitalRead(PUSHBUTTON_PIN) == LOW) {
-    setRGBLEDColor(200, 50, 30);
-    digitalWrite(COIL_PIN, LOW);
 
-    delay(coil_activation_time);
 
-    digitalWrite(COIL_PIN, HIGH);
-    setRGBLEDColor(50, 200, 50);
+  button.update();
+
+  if (button.pressed()) {
+    do_measurement = true;
+  }
+
+  if (Serial.available()) {
+    processCommand();
+  }
+
+  if (do_measurement) {
+    doMeasurement();
   }
 }
-
 void setRGBLEDColor(int r, int g, int b) {
+  // Set the RGB LED to the color given by r, g and b in the range 1-255
 
   analogWrite(LED_RED_PIN, r);
   analogWrite(LED_GREEN_PIN, g);
   analogWrite(LED_BLUE_PIN, b);
+}
+
+
+void processCommand() {
+  // Process a command received by Serial
+  // Commands are of the form XXXXX NNNNNN where XXXXX is a five character opcode and NNNNNN is an integer
+  memset(serial_buff, 0, SERIAL_BUFF_LEN);
+
+  bool done = false;
+  int char_cnt = 0;
+  int c;
+  int op;
+
+  while (not done) {
+    c = Serial.read();
+    if (c > 0) {
+      // Serial.println(c);
+      if (c == '\n') {
+        done = true;
+        //   Serial.println("Line end");
+      } else {
+
+        if (char_cnt == SERIAL_BUFF_LEN) {
+          done = true;
+        } else {
+          serial_buff[char_cnt] = c;
+          char_cnt++;
+        }
+      }
+    }
+  }
+  // Serial.println(serial_buff);
+  if (strncmp(serial_buff, "EXECU", 5) == 0) {
+    // Execute the cycle
+    do_measurement = true;
+    Serial.println("OK EXECU");
+  } else if (strncmp(serial_buff, "ONTIM", 5) == 0) {
+    // Coil activation time
+    op = getOp(serial_buff);
+    if (op >= 0) {
+      coil_activation_time = op;
+      Serial.print("OK ONTIM: ");
+      Serial.println(coil_activation_time);
+    }
+  } else if (strncmp(serial_buff, "SAMPT", 5) == 0) {
+    // Sample time
+    op = getOp(serial_buff);
+    if (op >= 0) {
+      sample_time = op;
+      Serial.print("OK SAMPT: ");
+      Serial.println(sample_time);
+    }
+  } else if (strncmp(serial_buff, "SAMRA", 5) == 0) {
+    // Sample rate
+    op = getOp(serial_buff);
+    if (op >= 0) {
+      sample_rate = op;
+      Serial.print("OK SUMRA: ");
+      Serial.println(sample_rate);
+    }
+  } else if (strncmp(serial_buff, "DELAY", 5) == 0) {
+    // Sample delay
+    op = getOp(serial_buff);
+    if (op >= 0) {
+      sample_delay = op;
+      Serial.print("OK DELAY: ");
+      Serial.println(sample_delay);
+    }
+  } else if (strncmp(serial_buff, "COOLD", 5) == 0) {
+    // Cool down period
+    op = getOp(serial_buff);
+    if (op >= 0) {
+      cool_down_period = op;
+      Serial.print("OK COOLDOWN: ");
+      Serial.println(cool_down_period);
+    }
+  }
+
+
+  return;
+}
+
+int getOp(const char* buff) {
+  // Extracts the integer operand from the input string. Returns -1 if it's not present
+  if (strlen(buff) > 7) {
+    return atoi(&buff[5]);
+  } else {
+    return -1;
+  }
+}
+
+void doMeasurement() {
+
+  setRGBLEDColor(200, 50, 30);
+  digitalWrite(COIL_PIN, LOW);
+
+  delay(coil_activation_time);
+
+  digitalWrite(COIL_PIN, HIGH);
+
+  // Wait delay time:
+  setRGBLEDColor(200, 50, 200);
+  delay(sample_delay);
+
+  setRGBLEDColor(200, 200, 50);
+  // record signal and send to Raspberry pi
+  recordSignal();
+
+  setRGBLEDColor(50, 50, 200);
+  delay(cool_down_period);
+
+  setRGBLEDColor(50, 200, 50);
+  do_measurement = false;
+  return;
+}
+
+void recordSignal()
+// Record a sample at the current rate for the current time.
+// Data is stored in SRAM and later transferred to the Raspberry PI by Serial
+{
+
+
+
+
+
+  return;
 }
