@@ -33,6 +33,10 @@ D13 - SPI SCK  (ADC + SRAM)
 SRAM is 23LC1024
 ADC is LTC1855
 
+Libraries Used:
+  Bounce2: https://github.com/thomasfredericks/Bounce2
+  SRAM_Simple: https://github.com/dndubins/SRAMsimple
+
 
 Quentin McDonald
 October 2024
@@ -40,7 +44,7 @@ October 2024
 // Includes
 #include <SPI.h>
 #include <Bounce2.h>
-
+#include <SRAMsimple.h>
 
 // Pin definitions
 #define PUSHBUTTON_PIN 2
@@ -55,6 +59,12 @@ October 2024
 #define SPI_MOSI_PIN 12
 #define SPI_CLOCK_PIN 13
 
+#define TEST_INT 42
+#define NUM_MEMTESTS 10
+
+
+#define CSPIN 10  // Default Chip Select Line for Uno (change as needed)
+SRAMsimple sram;  //initialize an instance of this class
 
 // INSTANTIATE A Button OBJECT
 Bounce2::Button button = Bounce2::Button();
@@ -76,7 +86,8 @@ int sample_time = 2000;           // Time sample will be on (ms)
 
 
 void setup() {
-  Serial.begin(19200);
+  Serial.begin(9600);
+  Serial.println("\n\nProton Precession Magnetometer - Coil Contoller\n");
 
   //LED: Start with Green
   pinMode(LED_RED_PIN, OUTPUT);
@@ -96,6 +107,33 @@ void setup() {
   // Coil MOSFET Gate pin:
   pinMode(COIL_PIN, OUTPUT);
   digitalWrite(COIL_PIN, HIGH);
+
+  // Setup and test SRAM memory
+  SPI.begin();
+  int tempInt = 0;
+  uint32_t test_address;
+  randomSeed(analogRead(A0));
+  for( int i=0; i< NUM_MEMTESTS; i++) {
+  test_address = random(65536);
+  sram.WriteInt(test_address, TEST_INT);
+  tempInt = sram.ReadInt(test_address);
+  if (tempInt == TEST_INT) {
+    Serial.print("Memory check passed - read ");
+    Serial.print(tempInt);
+    Serial.print(" from address ");
+    Serial.println(test_address);
+  } else {
+    Serial.print("Memory check passed - read ");
+    Serial.print(tempInt);
+    Serial.print(" from address ");
+    Serial.println(test_address);
+    Serial.print(" Expected: ");
+    Serial.println(TEST_INT);
+  }
+}
+  Serial.println("Memory Check done\n");
+
+
   Serial.println("Setup Done");
 }
 
@@ -179,7 +217,7 @@ void processCommand() {
     op = getOp(serial_buff);
     if (op >= 0) {
       sample_rate = op;
-      Serial.print("OK SUMRA: ");
+      Serial.print("OK SAMRA: ");
       Serial.println(sample_rate);
     }
   } else if (strncmp(serial_buff, "DELAY", 5) == 0) {
