@@ -81,6 +81,9 @@ if __name__ == '__main__':
 
     ppm = PyPPM(logger)
     ppm.sendDefaultValues()
+    
+    ppm.sendCommand("READV");
+    ppm.sendCommand("READV");
 
 #    ser.write(str('ONTIM `1000\n').encode('utf-8')) 
 #    print(ser.readline())
