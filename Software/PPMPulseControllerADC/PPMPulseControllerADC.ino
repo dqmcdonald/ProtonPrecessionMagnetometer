@@ -46,6 +46,8 @@ October 2024
 #include <Bounce2.h>
 #include <SRAMsimple.h>
 
+
+
 // Pin definitions
 #define PUSHBUTTON_PIN 2
 #define COIL_PIN 4
@@ -62,6 +64,8 @@ October 2024
 #define TEST_INT 42
 #define NUM_MEMTESTS 10
 
+#define VREF 20.0 // ADC Voltage ref
+
 
 #define CSPIN 10  // Default Chip Select Line for Uno (change as needed)
 SRAMsimple sram;  //initialize an instance of this class
@@ -72,6 +76,7 @@ Bounce2::Button button = Bounce2::Button();
 // Buffer for serial comms
 const int SERIAL_BUFF_LEN = 32;
 char serial_buff[SERIAL_BUFF_LEN];
+const int BAUD_RATE = 9600;
 
 
 // Flag to indicate if a measurement should be taken
@@ -86,7 +91,7 @@ int sample_time = 2000;           // Time sample will be on (ms)
 
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(BAUD_RATE);
   Serial.println("\n\nProton Precession Magnetometer - Coil Contoller\n");
 
   //LED: Start with Green
@@ -102,6 +107,9 @@ void setup() {
   // INDICATE THAT THE LOW STATE CORRESPONDS TO PHYSICALLY PRESSING THE BUTTON
   button.setPressedState(LOW);
 
+  // ADC CS Pin
+  pinMode(ADC_RD_PIN, OUTPUT);
+  digitalWrite(ADC_RD_PIN, HIGH);  // Pull Chip Select High
 
 
   // Coil MOSFET Gate pin:
@@ -113,25 +121,27 @@ void setup() {
   int tempInt = 0;
   uint32_t test_address;
   randomSeed(analogRead(A0));
-  for( int i=0; i< NUM_MEMTESTS; i++) {
-  test_address = random(65536);
-  sram.WriteInt(test_address, TEST_INT);
-  tempInt = sram.ReadInt(test_address);
-  if (tempInt == TEST_INT) {
-    Serial.print("Memory check passed - read ");
-    Serial.print(tempInt);
-    Serial.print(" from address ");
-    Serial.println(test_address);
-  } else {
-    Serial.print("Memory check passed - read ");
-    Serial.print(tempInt);
-    Serial.print(" from address ");
-    Serial.println(test_address);
-    Serial.print(" Expected: ");
-    Serial.println(TEST_INT);
+  for (int i = 0; i < NUM_MEMTESTS; i++) {
+    test_address = random(65536);
+    sram.WriteInt(test_address, TEST_INT);
+    tempInt = sram.ReadInt(test_address);
+    if (tempInt == TEST_INT) {
+      Serial.print("Memory check passed - read ");
+      Serial.print(tempInt);
+      Serial.print(" from address ");
+      Serial.println(test_address);
+    } else {
+      Serial.print("Memory check passed - read ");
+      Serial.print(tempInt);
+      Serial.print(" from address ");
+      Serial.println(test_address);
+      Serial.print(" Expected: ");
+      Serial.println(TEST_INT);
+    }
   }
-}
   Serial.println("Memory Check done\n");
+
+
 
 
   Serial.println("Setup Done");
@@ -236,7 +246,17 @@ void processCommand() {
       Serial.print("OK COOLDOWN: ");
       Serial.println(cool_down_period);
     }
+  } else if (strncmp(serial_buff, "READV", 5) == 0) {
+    uint16_t voltage_code = read_voltage();
+    float voltage =  code_to_voltage( voltage_code, VREF);
+
+    Serial.print("Voltage = : ");
+    Serial.println(voltage);
+  } else {
+    Serial.print("Uknown command: ");
+    Serial.println(serial_buff);
   }
+
 
 
   return;
@@ -286,4 +306,64 @@ void recordSignal()
 
 
   return;
+}
+
+float read_voltage(void) {
+  // Query the external ADC to get the current voltage value
+  uint16_t adc_code;
+  uint16_t voltage;
+
+  adc_code = 0x0;  // Differential, ports one and two
+
+  spi_transfer_word(ADC_RD_PIN, adc_code, &voltage);
+
+  return voltage;
+}
+
+
+
+// Code below here is taken in part from Linduino: https://github.com/analogdevicesinc/Linduino/tree/master
+// Reads and sends a word
+// Return 0 if successful, 1 if failed
+void spi_transfer_word(uint8_t cs_pin, uint16_t tx, uint16_t* rx) {
+  union {
+    uint8_t b[2];
+    uint16_t w;
+  } data_tx;
+
+  union {
+    uint8_t b[2];
+    uint16_t w;
+  } data_rx;
+
+  data_tx.w = tx;
+
+  digitalWrite(cs_pin, LOW);  //! 1) Pull CS low
+
+  data_rx.b[1] = SPI.transfer(data_tx.b[1]);  //! 2) Read MSB and send MSB
+  data_rx.b[0] = SPI.transfer(data_tx.b[0]);  //! 3) Read LSB and send LSB
+
+  *rx = data_rx.w;
+
+  digitalWrite(cs_pin, HIGH);  //! 4) Pull CS high
+}
+
+// Calculates the LTC1859 input voltage given the data, vref
+float code_to_voltage(uint16_t adc_code, float vref ) {
+  float voltage;
+  float sign = 1;
+
+
+  if ((adc_code & 0x8000) == 0x8000)  //adc code is < 0
+  {
+    adc_code = (adc_code ^ 0xFFFF) + 1;  //! Convert ADC code from two's complement to binary
+    sign = -1;
+  }
+  voltage = sign * (float)adc_code;
+  voltage = voltage / (pow(2, 15) - 1);  //! 2) This calculates the input as a fraction of the reference voltage (dimensionless)
+
+
+  voltage = voltage * vref;  //! 3) Multiply fraction by Vref to get the actual voltage at the input (in volts)
+
+  return (voltage);
 }
