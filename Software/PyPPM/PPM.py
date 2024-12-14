@@ -1,5 +1,7 @@
-import logging
 import serial
+import time
+import numpy as np
+
 #
 # Proton Precession Magnetometer Control Software
 # This module contains code that communicates with the Arduino Pro Mini
@@ -7,7 +9,9 @@ import serial
 # Communication is done by serial
 #
 
-BAUD_RATE = 9600  # Communication rate
+DATA_FILE_NAME = "ppm.dat"
+
+BAUD_RATE = 115200  # Communication rate
 
 ON_TIME_COMMAND = "ONTIM"
 ON_TIME_DEFAULT = 6000	    # Coil polarised for two seconds
@@ -16,7 +20,7 @@ SAMPLE_TIME_COMMAND = "SAMPT"
 SAMPLE_TIME_DEFAULT = 2000  # Sample for two seconds
 
 SAMPLE_RATE_COMMAND = "SAMRA"
-SAMPLE_RATE_DEFAULT = 20000 # 20000 samples/s
+SAMPLE_RATE_DEFAULT = 2000 # samples/s
 
 DELAY_COMMAND = "DELAY"
 DELAY_DEFAULT = 500 # Time between coil off and sampling begins
@@ -26,12 +30,24 @@ COOL_DOWN_DEFAULT = 10000 # Cool down MOSFET for 10 seconds
 
 EXECUTE_COMMAND = "EXECU"
 
-class PyPPM:
+class PPMRun:
     def __init__(self, lg=None):
-        self._ser = serial.Serial('/dev/serial0', 9600, timeout=1)
+        self._ser = serial.Serial('/dev/serial0', BAUD_RATE, timeout=1)
         self._ser.reset_input_buffer()
+        self._ser.reset_output_buffer() 
         self._logger = lg
+        self._signal_data = None
+        self._sample_rate = SAMPLE_RATE_DEFAULT
+        self._sample_time = SAMPLE_TIME_DEFAULT
         
+    def getSignalData(self):
+        return self._signal_data
+    
+    def getSampleRate(self):
+        return self._sample_rate
+    
+    def getSampleTime(self):
+        return self._sample_time
         
     def log(self, msg ):
         # Log message "msg" to the current logger (if any)
@@ -67,25 +83,24 @@ class PyPPM:
         self.sendCommand(COOL_DOWN_COMMAND, COOL_DOWN_DEFAULT )
        
 
+    def doMeasurement(self):
+        # Send command to activate the coil and record the signal
+        self.sendCommand(EXECUTE_COMMAND)
+        time.sleep(8)
+        resp = self._ser.readline()
+        resp = resp.decode('utf-8').strip()
+        num_samples = int(resp);
+        self.log("Number of samples: '{}'".format(num_samples))
+        
+        self._signal_data = np.zeros(num_samples)
+        
+        for i in range(num_samples):
+            resp = self._ser.readline()
+            resp = resp.decode('utf-8').strip()
+            self._signal_data[i] = int(resp)
+            
+        
+            
+        
+            
 
-
-
-
-
-if __name__ == '__main__':
-
-    logger = logging.getLogger("PPM")
-    logging.basicConfig(filename='ppm.log', level=logging.INFO,format='%(asctime)s %(message)s',
-                        datefmt="%d-%b-%Y %H:%M:%S")
-    
-
-    ppm = PyPPM(logger)
-    ppm.sendDefaultValues()
-    
-    ppm.sendCommand("READV");
-    ppm.sendCommand("READV");
-
-#    ser.write(str('ONTIM `1000\n').encode('utf-8')) 
-#    print(ser.readline())
-#    ser.write(str('EXECU\n').encode('utf-8')) 
-#    print(ser.readline())

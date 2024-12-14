@@ -1,3 +1,5 @@
+*.png
+__pycache__
 PPMCoil.pdf
 digikey*order.csv
 DataSheets/
