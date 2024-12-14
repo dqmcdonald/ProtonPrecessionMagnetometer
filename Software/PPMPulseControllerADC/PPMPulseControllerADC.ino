@@ -64,7 +64,7 @@ October 2024
 #define TEST_INT 42
 #define NUM_MEMTESTS 10
 
-#define VREF 20.0 // ADC Voltage ref
+#define VREF 20.0  // ADC Voltage ref
 
 
 #define CSPIN 10  // Default Chip Select Line for Uno (change as needed)
@@ -76,13 +76,11 @@ Bounce2::Button button = Bounce2::Button();
 // Buffer for serial comms
 const int SERIAL_BUFF_LEN = 32;
 char serial_buff[SERIAL_BUFF_LEN];
-const int BAUD_RATE = 9600;
+const long BAUD_RATE = 115200;
 
 
-// Flag to indicate if a measurement should be taken
-bool do_measurement = false;
 
-// Parameters
+// Parameters - these defaults will likley be overridden by commands from the Pi
 int coil_activation_time = 6000;  // Time coil will be on (ms)
 int sample_delay = 500;           // Wait time before sampling data (ms)
 int cool_down_period = 10000;     // Delay before next cycle of activation
@@ -118,6 +116,7 @@ void setup() {
 
   // Setup and test SRAM memory
   SPI.begin();
+  SPI.setClockDivider(SPI_CLOCK_DIV2);
   int tempInt = 0;
   uint32_t test_address;
   randomSeed(analogRead(A0));
@@ -153,16 +152,14 @@ void loop() {
   button.update();
 
   if (button.pressed()) {
-    do_measurement = true;
+    doMeasurement();
   }
 
   if (Serial.available()) {
     processCommand();
   }
 
-  if (do_measurement) {
-    doMeasurement();
-  }
+  
 }
 void setRGBLEDColor(int r, int g, int b) {
   // Set the RGB LED to the color given by r, g and b in the range 1-255
@@ -204,8 +201,8 @@ void processCommand() {
   // Serial.println(serial_buff);
   if (strncmp(serial_buff, "EXECU", 5) == 0) {
     // Execute the cycle
-    do_measurement = true;
     Serial.println("OK EXECU");
+    doMeasurement();
   } else if (strncmp(serial_buff, "ONTIM", 5) == 0) {
     // Coil activation time
     op = getOp(serial_buff);
@@ -247,8 +244,9 @@ void processCommand() {
       Serial.println(cool_down_period);
     }
   } else if (strncmp(serial_buff, "READV", 5) == 0) {
+    // Command for debugging the ADC
     uint16_t voltage_code = read_voltage();
-    float voltage =  code_to_voltage( voltage_code, VREF);
+    float voltage = code_to_voltage(voltage_code, VREF);
 
     Serial.print("Voltage = : ");
     Serial.println(voltage);
@@ -272,6 +270,7 @@ int getOp(const char* buff) {
 }
 
 void doMeasurement() {
+  unsigned long num_samples;
 
   setRGBLEDColor(200, 50, 30);
   digitalWrite(COIL_PIN, LOW);
@@ -286,29 +285,79 @@ void doMeasurement() {
 
   setRGBLEDColor(200, 200, 50);
   // record signal and send to Raspberry pi
-  recordSignal();
+  num_samples = recordSignal();
+
+  // sendData to the RPi
+  sendData(num_samples);
 
   setRGBLEDColor(50, 50, 200);
   delay(cool_down_period);
 
   setRGBLEDColor(50, 200, 50);
-  do_measurement = false;
+  
   return;
 }
 
-void recordSignal()
+unsigned long recordSignal()
 // Record a sample at the current rate for the current time.
 // Data is stored in SRAM and later transferred to the Raspberry PI by Serial
+// Returns the number of data sampled
 {
 
+  uint32_t address = 0;
+  unsigned long time_remaining;
 
 
+  // First calculate the period in us for the current sample rate:
+  unsigned long period = 1000000 / sample_rate;
+
+  unsigned long num_samples = ((unsigned long)sample_rate * (unsigned long)sample_time) / 1000;
+
+  uint16_t voltage = read_voltage();  // Start ADC reading
+  //bool done = false;
+  byte temp[2];
+  unsigned long start_time = 0;
+  unsigned long time_elapsed = 0;
 
 
-  return;
+  // Put memory into write mode:
+  pinMode(CSPIN, OUTPUT);    // set CS pin to output mode
+  digitalWrite(CS, LOW);     // set SPI slave select LOW
+  SPI.transfer(WRMR);        // command to write to mode register
+  SPI.transfer(Sequential);  // set for sequential mode
+  digitalWrite(CSPIN, HIGH);
+
+  // Do a loop for the number of samples
+  for (unsigned long isample = 0; isample < num_samples; isample++) {
+    start_time = micros();
+
+    voltage = read_voltage();
+
+    // sram.WriteInt(address, voltage);  // Don't use SRAM:
+    // Use expanded version direct for speed:
+    temp[0] = (byte)(voltage >> 8);       // high byte of integer
+    temp[1] = (byte)(voltage);            // low byte of integer
+    PORTB = PORTB & B11111011;            // start new command sequence (CS Pin low)
+    SPI.transfer(WRITE);                  // send WRITE command
+    SPI.transfer((byte)(address >> 16));  // send high byte of address
+    SPI.transfer((byte)(address >> 8));   // send middle byte of address
+    SPI.transfer((byte)address);          // send low byte of address
+    SPI.transfer(temp, 2);                // transfer an array of data => needs array name & size (2 elements)
+    PORTB = PORTB | B00000100;            // End with CSPin High
+
+    address += 2;
+
+    // Wait for at least the rest of the sampling period:
+    time_elapsed = micros() - start_time;
+    time_remaining = period - time_elapsed;
+    if (time_remaining > 3)
+      delayMicroseconds(time_remaining);
+  }
+
+  return num_samples;
 }
 
-float read_voltage(void) {
+uint16_t read_voltage(void) {
   // Query the external ADC to get the current voltage value
   uint16_t adc_code;
   uint16_t voltage;
@@ -320,7 +369,18 @@ float read_voltage(void) {
   return voltage;
 }
 
+void sendData(unsigned long num_samples) {
+  // Send data via Serial to the RPi
+  int voltage;
+  Serial.println(num_samples);
+  uint32_t address = 0;
 
+  for (unsigned long i = 0; i < num_samples; i++) {
+    voltage = sram.ReadInt(address);
+    address += 2;
+    Serial.println(voltage);
+  }
+}
 
 // Code below here is taken in part from Linduino: https://github.com/analogdevicesinc/Linduino/tree/master
 // Reads and sends a word
@@ -338,18 +398,20 @@ void spi_transfer_word(uint8_t cs_pin, uint16_t tx, uint16_t* rx) {
 
   data_tx.w = tx;
 
-  digitalWrite(cs_pin, LOW);  //! 1) Pull CS low
+  //digitalWrite(cs_pin, LOW);  //! 1) Pull CS low
+  PORTB = PORTB & B11111110;
 
   data_rx.b[1] = SPI.transfer(data_tx.b[1]);  //! 2) Read MSB and send MSB
   data_rx.b[0] = SPI.transfer(data_tx.b[0]);  //! 3) Read LSB and send LSB
 
   *rx = data_rx.w;
 
-  digitalWrite(cs_pin, HIGH);  //! 4) Pull CS high
+  //digitalWrite(cs_pin, HIGH);  //! 4) Pull CS high
+  PORTB = PORTB | B00000001;
 }
 
 // Calculates the LTC1859 input voltage given the data, vref
-float code_to_voltage(uint16_t adc_code, float vref ) {
+float code_to_voltage(uint16_t adc_code, float vref) {
   float voltage;
   float sign = 1;
 
