@@ -76,9 +76,13 @@ Bounce2::Button button = Bounce2::Button();
 // Buffer for serial comms
 const int SERIAL_BUFF_LEN = 32;
 char serial_buff[SERIAL_BUFF_LEN];
-const long BAUD_RATE = 115200;
+const long BAUD_RATE = 57600;
 
-
+struct SampleData {
+public:
+  unsigned long num_samples;
+  unsigned long actual_sample_rate;  // measured sample rate in samples/s
+};
 
 // Parameters - these defaults will likley be overridden by commands from the Pi
 int coil_activation_time = 6000;  // Time coil will be on (ms)
@@ -158,8 +162,6 @@ void loop() {
   if (Serial.available()) {
     processCommand();
   }
-
-  
 }
 void setRGBLEDColor(int r, int g, int b) {
   // Set the RGB LED to the color given by r, g and b in the range 1-255
@@ -270,7 +272,8 @@ int getOp(const char* buff) {
 }
 
 void doMeasurement() {
-  unsigned long num_samples;
+  // Activates the coil, waits for the delay time and then records a signal
+  SampleData sd;
 
   setRGBLEDColor(200, 50, 30);
   digitalWrite(COIL_PIN, LOW);
@@ -285,23 +288,24 @@ void doMeasurement() {
 
   setRGBLEDColor(200, 200, 50);
   // record signal and send to Raspberry pi
-  num_samples = recordSignal();
+  
+  sd = recordSignal();
 
   // sendData to the RPi
-  sendData(num_samples);
+  sendData(sd.num_samples, sd.actual_sample_rate);
 
   setRGBLEDColor(50, 50, 200);
   delay(cool_down_period);
 
   setRGBLEDColor(50, 200, 50);
-  
+
   return;
 }
 
-unsigned long recordSignal()
+SampleData recordSignal()
 // Record a sample at the current rate for the current time.
 // Data is stored in SRAM and later transferred to the Raspberry PI by Serial
-// Returns the number of data sampled
+// Returns the number of data sampled and the *actual* sample rate
 {
 
   uint32_t address = 0;
@@ -316,6 +320,7 @@ unsigned long recordSignal()
   uint16_t voltage = read_voltage();  // Start ADC reading
   //bool done = false;
   byte temp[2];
+  unsigned long overall_start_time = 0l;
   unsigned long start_time = 0;
   unsigned long time_elapsed = 0;
 
@@ -327,6 +332,8 @@ unsigned long recordSignal()
   SPI.transfer(Sequential);  // set for sequential mode
   digitalWrite(CSPIN, HIGH);
 
+
+  overall_start_time = millis();
   // Do a loop for the number of samples
   for (unsigned long isample = 0; isample < num_samples; isample++) {
     start_time = micros();
@@ -354,7 +361,16 @@ unsigned long recordSignal()
       delayMicroseconds(time_remaining);
   }
 
-  return num_samples;
+  unsigned long overall_elapsed_time = millis() - overall_start_time;
+  float time_secs = overall_elapsed_time/1000.0; // time in seconds
+
+  unsigned long actual_sample_rate = (unsigned long)((float)num_samples/time_secs);
+
+  SampleData sd;
+  sd.num_samples = num_samples;
+  sd.actual_sample_rate = actual_sample_rate;
+
+  return sd;
 }
 
 uint16_t read_voltage(void) {
@@ -369,9 +385,10 @@ uint16_t read_voltage(void) {
   return voltage;
 }
 
-void sendData(unsigned long num_samples) {
+void sendData(unsigned long num_samples, unsigned long actual_sample_rate) {
   // Send data via Serial to the RPi
   int voltage;
+  Serial.println(actual_sample_rate);
   Serial.println(num_samples);
   uint32_t address = 0;
 
