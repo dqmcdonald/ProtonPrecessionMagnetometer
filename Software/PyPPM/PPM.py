@@ -22,13 +22,13 @@ ON_TIME_DEFAULT = 6000	    # Coil polarised for six seconds
 # is calculated from the sample time in seconds * the sample rate.
 # The maximum number of samples is 32K.
 SAMPLE_TIME_COMMAND = "SAMPT"
-SAMPLE_TIME_DEFAULT = 1000  # Sample for milliseconds
+SAMPLE_TIME_DEFAULT = 1500  # Sample for milliseconds
 
 SAMPLE_RATE_COMMAND = "SAMRA"
 SAMPLE_RATE_DEFAULT = 16000 # samples/s. 
 
 DELAY_COMMAND = "DELAY"
-DELAY_DEFAULT = 100 # Time between coil off and sampling begins
+DELAY_DEFAULT = 500 # Time between coil off and sampling begins
 
 COOL_DOWN_COMMAND = "COOLD"
 COOL_DOWN_DEFAULT = 10000 # Cool down MOSFET for 10 seconds
