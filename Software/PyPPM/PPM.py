@@ -11,19 +11,24 @@ import numpy as np
 
 DATA_FILE_NAME = "ppm.dat"
 
-BAUD_RATE = 115200  # Communication rate
+BAUD_RATE = 57600  # Serial Communication rate
 
 ON_TIME_COMMAND = "ONTIM"
-ON_TIME_DEFAULT = 6000	    # Coil polarised for two seconds
+ON_TIME_DEFAULT = 6000	    # Coil polarised for six seconds
 
+# Maximum sample rate from hardware appears to be about 
+# 16000 samples/s. Therefore request that as a nominal sample rate. But this
+# is more about indicating the number of samples. The number of samples
+# is calculated from the sample time in seconds * the sample rate.
+# The maximum number of samples is 32K.
 SAMPLE_TIME_COMMAND = "SAMPT"
-SAMPLE_TIME_DEFAULT = 2000  # Sample for two seconds
+SAMPLE_TIME_DEFAULT = 1000  # Sample for milliseconds
 
 SAMPLE_RATE_COMMAND = "SAMRA"
-SAMPLE_RATE_DEFAULT = 2000 # samples/s
+SAMPLE_RATE_DEFAULT = 16000 # samples/s. 
 
 DELAY_COMMAND = "DELAY"
-DELAY_DEFAULT = 500 # Time between coil off and sampling begins
+DELAY_DEFAULT = 100 # Time between coil off and sampling begins
 
 COOL_DOWN_COMMAND = "COOLD"
 COOL_DOWN_DEFAULT = 10000 # Cool down MOSFET for 10 seconds
@@ -39,12 +44,17 @@ class PPMRun:
         self._signal_data = None
         self._sample_rate = SAMPLE_RATE_DEFAULT
         self._sample_time = SAMPLE_TIME_DEFAULT
+        self._actual_sample_rate = SAMPLE_RATE_DEFAULT
         
     def getSignalData(self):
         return self._signal_data
     
     def getSampleRate(self):
         return self._sample_rate
+
+    def getActualSampleRate(self):
+        # The measured sample rate
+        return self._actual_sample_rate
     
     def getSampleTime(self):
         return self._sample_time
@@ -87,18 +97,34 @@ class PPMRun:
         # Send command to activate the coil and record the signal
         self.sendCommand(EXECUTE_COMMAND)
         time.sleep(8)
+
+        resp = self._ser.readline()
+        resp = resp.decode('utf-8').strip()
+        self._actual_sample_rate = int(resp);
+        self.log("Actual Sample Rate:  '{}' samples/s".format(
+                self._actual_sample_rate))
+
         resp = self._ser.readline()
         resp = resp.decode('utf-8').strip()
         num_samples = int(resp);
         self.log("Number of samples: '{}'".format(num_samples))
+
         
         self._signal_data = np.zeros(num_samples)
+
+        with open(DATA_FILE_NAME, mode='w', encoding= "utf-8") as f:         
+            f.write("{}\n".format(num_samples));
+            f.write("{}\n".format(self._actual_sample_rate));
         
-        for i in range(num_samples):
-            resp = self._ser.readline()
-            resp = resp.decode('utf-8').strip()
-            self._signal_data[i] = int(resp)
+            for i in range(num_samples):
+                resp = self._ser.readline()
+                resp = resp.decode('utf-8').strip()
+                self._signal_data[i] = int(resp)
+                f.write("{}\n".format(int(resp)))
             
+        self.log("Recieved '{}' samples".format(num_samples))
+
+        
         
             
         

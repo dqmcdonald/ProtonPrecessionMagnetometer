@@ -12,14 +12,18 @@ logger = logging.getLogger("PPM")
 logging.basicConfig(filename='ppm.log', level=logging.INFO,format='%(asctime)s %(message)s',
                     datefmt="%d-%b-%Y %H:%M:%S")
 
+logger.info("**********************************")
+logger.info("Beginning PPM Run " )
 
 ppm = PPM.PPMRun(logger)
 ppm.sendDefaultValues()
 
 ppm.doMeasurement()
     
-ppm_calc = PPMCalc.PPMCalc(ppm.getSampleRate(),ppm.getSampleTime(),
+ppm_calc = PPMCalc.PPMCalc(ppm.getActualSampleRate(),ppm.getSampleTime(),
                            ppm.getSignalData(),logger)
 
-ppm_calc.plotSignal("original.png",1000)
-ppm_calc.filterSignal(20, 40, 4)
+ppm_calc.plotSignal("original.png",100)
+ppm_calc.filterSignal(2300, 3300, 5)
+ppm_calc.plotSignal("filtered.png",100)
+ppm_calc.doFFT("fft.png")
