@@ -13,12 +13,14 @@ When sensing is complete, the arduino will send the data to the RPi over serial 
 There is an RGB LED used to indicate, by color, the current action
 A push button can be used to initiate an cycle of energising the coil
 
+A RTC 32kHz output pin is attached to pin 3 for use as a timer during sampling.
+
 
 Pin Assignments:
 D0  - Serial TX (To Rpi)
 D1  - Serial RX (To Rpi)
 D2  - Attached to pushbutton (activiated by going LOW)
-D3  - Not Used
+D3  - RTC 32 kHz interrupt
 D4  - Activate PPM Coil
 D5  - RGB Red
 D6  - RGB Blue
@@ -50,6 +52,7 @@ October 2024
 
 // Pin definitions
 #define PUSHBUTTON_PIN 2
+const byte INTERRUPT_PIN = 3;
 #define COIL_PIN 4
 #define LED_RED_PIN 5
 #define LED_BLUE_PIN 6
@@ -65,6 +68,8 @@ October 2024
 #define NUM_MEMTESTS 10
 
 #define VREF 20.0  // ADC Voltage ref
+
+volatile long interrupt_counter = 0l;
 
 
 #define CSPIN 10  // Default Chip Select Line for Uno (change as needed)
@@ -86,10 +91,10 @@ public:
 
 // Parameters - these defaults will likley be overridden by commands from the Pi
 int coil_activation_time = 6000;  // Time coil will be on (ms)
-int sample_delay = 500;           // Wait time before sampling data (ms)
+int sample_delay = 100;           // Wait time before sampling data (ms)
 int cool_down_period = 10000;     // Delay before next cycle of activation
-int sample_rate = 20000;          // Sample rate (samples/s)
-int sample_time = 2000;           // Time sample will be on (ms)
+int sample_rate = 15000;          // Sample rate (samples/s)
+int sample_time = 1000;           // Time sample will be on (ms)
 
 
 void setup() {
@@ -108,6 +113,9 @@ void setup() {
   button.interval(5);
   // INDICATE THAT THE LOW STATE CORRESPONDS TO PHYSICALLY PRESSING THE BUTTON
   button.setPressedState(LOW);
+
+  // Interrupt in pin
+  pinMode(INTERRUPT_PIN, INPUT_PULLUP);
 
   // ADC CS Pin
   pinMode(ADC_RD_PIN, OUTPUT);
@@ -288,7 +296,7 @@ void doMeasurement() {
 
   setRGBLEDColor(200, 200, 50);
   // record signal and send to Raspberry pi
-  
+
   sd = recordSignal();
 
   // sendData to the RPi
@@ -309,20 +317,14 @@ SampleData recordSignal()
 {
 
   uint32_t address = 0;
-  unsigned long time_remaining;
 
 
-  // First calculate the period in us for the current sample rate:
-  unsigned long period = 1000000 / sample_rate;
 
   unsigned long num_samples = ((unsigned long)sample_rate * (unsigned long)sample_time) / 1000;
 
   uint16_t voltage = read_voltage();  // Start ADC reading
-  //bool done = false;
   byte temp[2];
-  unsigned long overall_start_time = 0l;
-  unsigned long start_time = 0;
-  unsigned long time_elapsed = 0;
+  
 
 
   // Put memory into write mode:
@@ -333,10 +335,14 @@ SampleData recordSignal()
   digitalWrite(CSPIN, HIGH);
 
 
-  overall_start_time = millis();
+
+  // Attach an interrupt timer
+  interrupt_counter = 0;
+  attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), timer_isr, RISING);
+
   // Do a loop for the number of samples
   for (unsigned long isample = 0; isample < num_samples; isample++) {
-    start_time = micros();
+    
 
     voltage = read_voltage();
 
@@ -354,18 +360,17 @@ SampleData recordSignal()
 
     address += 2;
 
-    // Wait for at least the rest of the sampling period:
-    time_elapsed = micros() - start_time;
-    time_remaining = period - time_elapsed;
-    if (time_remaining > 3)
-      delayMicroseconds(time_remaining);
+    
   }
 
-  unsigned long overall_elapsed_time = millis() - overall_start_time;
-  float time_secs = overall_elapsed_time/1000.0; // time in seconds
+  detachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN));
 
-  unsigned long actual_sample_rate = (unsigned long)((float)num_samples/time_secs);
+  float time_secs = interrupt_counter / 32768.0;  // time in seconds
+  
 
+  unsigned long actual_sample_rate = (unsigned long)((float)num_samples / time_secs);
+ 
+ 
   SampleData sd;
   sd.num_samples = num_samples;
   sd.actual_sample_rate = actual_sample_rate;
@@ -377,6 +382,8 @@ uint16_t read_voltage(void) {
   // Query the external ADC to get the current voltage value
   uint16_t adc_code;
   uint16_t voltage;
+
+
 
   adc_code = 0x0;  // Differential, ports one and two
 
@@ -397,6 +404,11 @@ void sendData(unsigned long num_samples, unsigned long actual_sample_rate) {
     address += 2;
     Serial.println(voltage);
   }
+}
+
+// Interrupt ISR - increments the counter
+void timer_isr(void) {
+  interrupt_counter += 1;
 }
 
 // Code below here is taken in part from Linduino: https://github.com/analogdevicesinc/Linduino/tree/master
