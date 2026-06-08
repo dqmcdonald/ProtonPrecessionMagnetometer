@@ -1,460 +1,571 @@
 /***
-Arduino sketch for Proton Precession Magnetometer Pulse Controller
+ * PPMPulseControllerADC.ino — Arduino controller for Proton Precession Magnetometer
+ *
+ * Receives configuration commands from a Raspberry Pi over serial and manages
+ * the full measurement cycle:
+ *
+ *   1. POLARISE  Energise the coil (COIL_PIN LOW) for coil_activation_time ms.
+ *                The strong DC field aligns proton spins in the water sample
+ *                along the coil axis (T1 relaxation, ~3 s for tap water;
+ *                default 6 s ≈ 2 × T1 captures most available magnetisation).
+ *
+ *   2. SETTLE    Switch coil off; wait sample_delay ms for the large inductive
+ *                transient to decay so it does not saturate the ADC input.
+ *
+ *   3. SAMPLE    Read the precession signal from the LTC1855 SPI ADC and store
+ *                each 16-bit sample in the 23LC1024 SPI SRAM.  The loop runs
+ *                as fast as possible; actual rate is measured via the RTC
+ *                32.768 kHz interrupt and reported to the Pi.
+ *
+ *   4. TRANSMIT  Send the actual sample rate, sample count, and all ADC values
+ *                to the Pi over serial.
+ *
+ *   5. COOL DOWN Wait cool_down_period ms for the MOSFET to cool.  During this
+ *                phase serial commands are still processed, so the Pi can send
+ *                the next run's configuration without risking a serial-buffer
+ *                overflow.  An EXECU received during cool-down is queued and
+ *                executed automatically when cool-down completes.
+ *
+ * Pin assignments:
+ *   D0  Serial TX (to Pi)            D1  Serial RX (from Pi)
+ *   D2  Push button (LOW = pressed)  D3  RTC 32.768 kHz interrupt
+ *   D4  Coil activate (LOW = on)     D5  RGB Red
+ *   D6  RGB Blue                     D7  ADC BUSY (not currently used)
+ *   D8  ADC CS / RD                  D9  RGB Green
+ *   D10 SRAM CS                      D11 SPI MISO
+ *   D12 SPI MOSI                     D13 SPI SCK
+ *
+ * External devices:
+ *   ADC:  LTC1855 — 16-bit differential SPI ADC, signed two's complement output
+ *   SRAM: 23LC1024 — 128 KB SPI SRAM (65 536 uint16_t samples maximum)
+ *   RTC:  32.768 kHz square wave; rising edges counted to measure elapsed time
+ *
+ * Serial protocol (ASCII, '\n'-terminated):
+ *   Commands  "XXXXX NNNN\n" — 5-char opcode, optional integer parameter
+ *   Responses "OK XXXXX: N\n" on success; "ERR: ...\n" on error
+ *   Data      actual_sample_rate\n  num_samples\n  sample_0\n  sample_1\n ...
+ *
+ * Libraries: Bounce2, SRAMsimple
+ * Quentin McDonald, October 2024
+ */
 
-Arduino receives instructions and sends data via Serial connection from RaspberryPi Zero 2 W 
-
-PPM Coil is energiesed by turning pin 4 low, this makes the voltage on the MOSETS go low via an optocoupler
-
-One coil is turned off there is a brief delay, then the ADC is used sample the signal from the sensor coils.
-For speed each sample is stored in the external SPI 1MB SRAM chip
-Target sample rate is 20,000/s
-When sensing is complete, the arduino will send the data to the RPi over serial where further analysis will be peformed.
-
-There is an RGB LED used to indicate, by color, the current action
-A push button can be used to initiate an cycle of energising the coil
-
-A RTC 32kHz output pin is attached to pin 3 for use as a timer during sampling.
-
-
-Pin Assignments:
-D0  - Serial TX (To Rpi)
-D1  - Serial RX (To Rpi)
-D2  - Attached to pushbutton (activiated by going LOW)
-D3  - RTC 32 kHz interrupt
-D4  - Activate PPM Coil
-D5  - RGB Red
-D6  - RGB Blue
-D7  - ADC BUSY Pin
-D8  - ADC RD (Clock Select)
-D9  - RGB Green
-D10 - SRAM Clock Select
-D11 - SPI MISO (ADC + SRAM)
-D12 - SPI MOSI (ADC + SRAM)
-D13 - SPI SCK  (ADC + SRAM)
-
-SRAM is 23LC1024
-ADC is LTC1855
-
-Libraries Used:
-  Bounce2: https://github.com/thomasfredericks/Bounce2
-  SRAM_Simple: https://github.com/dndubins/SRAMsimple
-
-
-Quentin McDonald
-October 2024
-*/
-// Includes
 #include <SPI.h>
 #include <Bounce2.h>
 #include <SRAMsimple.h>
 
+// ── Pin definitions ──────────────────────────────────────────────────────────
+// const uint8_t is preferred over #define: type-safe and visible in debuggers.
 
+const uint8_t PUSHBUTTON_PIN = 2;
+const uint8_t INTERRUPT_PIN  = 3;   // RTC 32.768 kHz square-wave input
+const uint8_t COIL_PIN       = 4;   // LOW = coil on (optocoupler/MOSFET active-low)
+const uint8_t LED_RED_PIN    = 5;
+const uint8_t LED_BLUE_PIN   = 6;
+// Pin 7 (ADC BUSY) is wired but not used in firmware
+const uint8_t ADC_CS_PIN     = 8;   // LTC1855 chip select (= /RD pin)
+const uint8_t LED_GREEN_PIN  = 9;
+const uint8_t SRAM_CS_PIN    = 10;  // 23LC1024 chip select
+// Pins 11-13 are SPI (MISO/MOSI/SCK), managed by the SPI library
 
-// Pin definitions
-#define PUSHBUTTON_PIN 2
-const byte INTERRUPT_PIN = 3;
-#define COIL_PIN 4
-#define LED_RED_PIN 5
-#define LED_BLUE_PIN 6
-#define BUSY_PIN 7
-#define ADC_RD_PIN 8
-#define LED_GREEN_PIN 9
-#define SRAM_CS_PIN 10
-#define SPI_MISO_PIN 11
-#define SPI_MOSI_PIN 12
-#define SPI_CLOCK_PIN 13
+// ── Constants ────────────────────────────────────────────────────────────────
 
-#define TEST_INT 42
-#define NUM_MEMTESTS 10
+// LTC1855 is a ±10 V differential ADC; full-scale range = 20 V, so VREF = 20.
+// Only used by the READV debug command.
+const float VREF = 20.0f;
 
-#define VREF 20.0  // ADC Voltage ref
+// 23LC1024 capacity: 128 KB = 65 536 × 2-byte (uint16_t) samples.
+const unsigned long MAX_SAMPLES = 65536UL;
 
-volatile long interrupt_counter = 0l;
+// Self-test value and iteration count for SRAM startup check.
+const int TEST_INT    = 42;
+const int NUM_MEMTESTS = 10;
 
-
-#define CSPIN 10  // Default Chip Select Line for Uno (change as needed)
-SRAMsimple sram;  //initialize an instance of this class
-
-// INSTANTIATE A Button OBJECT
-Bounce2::Button button = Bounce2::Button();
-
-// Buffer for serial comms
-const int SERIAL_BUFF_LEN = 32;
-char serial_buff[SERIAL_BUFF_LEN];
+// Serial baud rate — must match PPM.py BAUD_RATE.
 const long BAUD_RATE = 57600;
 
-struct SampleData {
-public:
-  unsigned long num_samples;
-  unsigned long actual_sample_rate;  // measured sample rate in samples/s
+// Command buffer: longest possible command is "COOLD 10000\n" = 12 chars.
+const int SERIAL_BUFF_LEN = 32;
+
+// RTC square-wave frequency for elapsed-time measurement during sampling.
+const float RTC_FREQ_HZ = 32768.0f;
+
+// ── State machine ─────────────────────────────────────────────────────────────
+// Non-blocking design: the main loop never calls delay() except for the brief
+// sample_delay settle period.  This keeps the serial port responsive during the
+// long polarise and cool-down phases and prevents buffer overflow on multi-run
+// measurements.
+
+enum MeasurementState {
+    STATE_IDLE,       // waiting for EXECU command or button press
+    STATE_POLARISING, // coil energised; waiting for coil_activation_time to expire
+    STATE_COOLING     // MOSFET cool-down after data sent; commands still accepted
 };
 
-// Parameters - these defaults will likley be overridden by commands from the Pi
-int coil_activation_time = 6000;  // Time coil will be on (ms)
-int sample_delay = 100;           // Wait time before sampling data (ms)
-int cool_down_period = 10000;     // Delay before next cycle of activation
-int sample_rate = 15000;          // Sample rate (samples/s)
-int sample_time = 1000;           // Time sample will be on (ms)
+MeasurementState measurement_state = STATE_IDLE;
+unsigned long    state_start_ms    = 0;
 
+// Set true when EXECU arrives during cool-down; the measurement starts
+// automatically as soon as cool-down completes.
+bool measurement_requested = false;
+
+// ── Globals ───────────────────────────────────────────────────────────────────
+
+// Incremented by timer_isr() on each 32.768 kHz rising edge.
+// Must be volatile because it is written in an ISR and read in the main loop.
+// unsigned long prevents negative wrap-around (long could go negative after
+// ~18 hours of continuous interrupts, though this never occurs in practice).
+volatile unsigned long interrupt_counter = 0;
+
+SRAMsimple      sram;
+Bounce2::Button button = Bounce2::Button();
+
+char serial_buff[SERIAL_BUFF_LEN];
+
+// Measurement parameters — Pi overrides these before each run via commands.
+// Defaults match PPM.py defaults so a freshly powered Arduino behaves sensibly
+// even if the Pi does not send configuration.
+int coil_activation_time = 6000;   // ms  polarisation time (~2 × T1 for water)
+int sample_delay         = 500;    // ms  transient settle time after coil off
+int cool_down_period     = 10000;  // ms  MOSFET thermal recovery between runs
+int sample_rate          = 16000;  // used only to compute num_samples (see SAMRA note)
+int sample_time          = 1500;   // ms  ADC sampling window
+
+// ── Structs ───────────────────────────────────────────────────────────────────
+
+struct SampleData {
+    unsigned long num_samples;
+    unsigned long actual_sample_rate;
+};
+
+// ── Forward declarations ──────────────────────────────────────────────────────
+
+void          processCommand();
+void          startMeasurement();
+SampleData    recordSignal();
+void          sendData(unsigned long num_samples, unsigned long actual_sample_rate);
+int16_t       read_voltage();
+void          spi_transfer_word(uint8_t cs_pin, uint16_t tx, uint16_t *rx);
+float         code_to_voltage(uint16_t adc_code, float vref);
+void          setRGBLEDColor(int r, int g, int b);
+void          timer_isr();
+int           getOp(const char *buff);
+
+// ── setup() ──────────────────────────────────────────────────────────────────
 
 void setup() {
-  Serial.begin(BAUD_RATE);
-  Serial.println("\n\nProton Precession Magnetometer - Coil Contoller\n");
+    Serial.begin(BAUD_RATE);
+    // If a command arrives partially (serial noise, host crash mid-send),
+    // readBytesUntil() gives up after 200 ms rather than blocking forever.
+    Serial.setTimeout(200);
+    Serial.println(F("\n\nProton Precession Magnetometer - Coil Controller\n"));
 
-  //LED: Start with Green
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(LED_BLUE_PIN, OUTPUT);
-  setRGBLEDColor(50, 200, 50);
+    // LED: green = ready
+    pinMode(LED_RED_PIN,   OUTPUT);
+    pinMode(LED_GREEN_PIN, OUTPUT);
+    pinMode(LED_BLUE_PIN,  OUTPUT);
+    setRGBLEDColor(50, 200, 50);
 
-  // Pushbutton:
-  button.attach(PUSHBUTTON_PIN, INPUT_PULLUP);  // USE INTERNAL PULL-UP
-  // DEBOUNCE INTERVAL IN MILLISECONDS
-  button.interval(5);
-  // INDICATE THAT THE LOW STATE CORRESPONDS TO PHYSICALLY PRESSING THE BUTTON
-  button.setPressedState(LOW);
+    // Push button with internal pull-up; LOW = physically pressed
+    button.attach(PUSHBUTTON_PIN, INPUT_PULLUP);
+    button.interval(5);
+    button.setPressedState(LOW);
 
-  // Interrupt in pin
-  pinMode(INTERRUPT_PIN, INPUT_PULLUP);
+    // RTC 32.768 kHz input — interrupt attached only during sampling
+    pinMode(INTERRUPT_PIN, INPUT_PULLUP);
 
-  // ADC CS Pin
-  pinMode(ADC_RD_PIN, OUTPUT);
-  digitalWrite(ADC_RD_PIN, HIGH);  // Pull Chip Select High
+    // ADC CS: deassert (HIGH) until a conversion is requested
+    pinMode(ADC_CS_PIN, OUTPUT);
+    digitalWrite(ADC_CS_PIN, HIGH);
 
+    // Coil MOSFET gate: HIGH = coil OFF (active-low via optocoupler)
+    pinMode(COIL_PIN, OUTPUT);
+    digitalWrite(COIL_PIN, HIGH);
 
-  // Coil MOSFET Gate pin:
-  pinMode(COIL_PIN, OUTPUT);
-  digitalWrite(COIL_PIN, HIGH);
+    // SPI bus — ADC (LTC1855) and SRAM (23LC1024) share MISO/MOSI/SCK.
+    // SPI_CLOCK_DIV2 = 8 MHz, within the LTC1855's 10 MHz maximum.
+    SPI.begin();
+    SPI.setClockDivider(SPI_CLOCK_DIV2);
 
-  // Setup and test SRAM memory
-  SPI.begin();
-  SPI.setClockDivider(SPI_CLOCK_DIV2);
-  int tempInt = 0;
-  uint32_t test_address;
-  randomSeed(analogRead(A0));
-  for (int i = 0; i < NUM_MEMTESTS; i++) {
-    test_address = random(65536);
-    sram.WriteInt(test_address, TEST_INT);
-    tempInt = sram.ReadInt(test_address);
-    if (tempInt == TEST_INT) {
-      Serial.print("Memory check passed - read ");
-      Serial.print(tempInt);
-      Serial.print(" from address ");
-      Serial.println(test_address);
-    } else {
-      Serial.print("Memory check passed - read ");
-      Serial.print(tempInt);
-      Serial.print(" from address ");
-      Serial.println(test_address);
-      Serial.print(" Expected: ");
-      Serial.println(TEST_INT);
+    // SRAM startup self-test: write and read back TEST_INT at random addresses.
+    randomSeed(analogRead(A0));
+    bool memory_ok = true;
+    for (int i = 0; i < NUM_MEMTESTS; i++) {
+        uint32_t addr = random(65536);
+        sram.WriteInt(addr, TEST_INT);
+        int readback = sram.ReadInt(addr);
+        if (readback == TEST_INT) {
+            Serial.print(F("Memory check passed: read "));
+            Serial.print(readback);
+            Serial.print(F(" from address "));
+            Serial.println(addr);
+        } else {
+            // BUG FIX: original code printed "passed" in both branches.
+            Serial.print(F("Memory check FAILED: read "));
+            Serial.print(readback);
+            Serial.print(F(" from address "));
+            Serial.print(addr);
+            Serial.print(F(", expected "));
+            Serial.println(TEST_INT);
+            memory_ok = false;
+        }
     }
-  }
-  Serial.println("Memory Check done\n");
-
-
-
-
-  Serial.println("Setup Done");
+    Serial.println(memory_ok ? F("Memory check done — all passed\n")
+                              : F("Memory check done — FAILURES DETECTED\n"));
+    Serial.println(F("Setup done"));
 }
+
+// ── loop() ───────────────────────────────────────────────────────────────────
 
 void loop() {
+    button.update();
 
+    // Accept serial commands when idle or cooling.
+    // Processing commands during cool-down prevents the 64-byte hardware
+    // serial receive buffer overflowing when the Pi sends the next run's
+    // configuration immediately after reading the previous run's data.
+    if (Serial.available() &&
+        (measurement_state == STATE_IDLE || measurement_state == STATE_COOLING)) {
+        processCommand();
+    }
 
-  button.update();
+    switch (measurement_state) {
 
-  if (button.pressed()) {
-    doMeasurement();
-  }
+        case STATE_IDLE:
+            if (button.pressed()) {
+                startMeasurement();
+            }
+            break;
 
-  if (Serial.available()) {
-    processCommand();
-  }
+        case STATE_POLARISING:
+            if (millis() - state_start_ms >= (unsigned long)coil_activation_time) {
+                // Proton spins are now aligned along the coil axis.  Switch off
+                // the coil; they will precess around Earth's field at the Larmor
+                // frequency: f = γ·B/(2π) ≈ 2435 Hz for 57 µT mid-latitude field.
+                digitalWrite(COIL_PIN, HIGH);
+                setRGBLEDColor(200, 50, 200);  // purple = settling
+
+                // Brief blocking delay for the inductive transient to decay below
+                // the ADC input range before sampling begins.
+                delay(sample_delay);
+
+                setRGBLEDColor(200, 200, 50);  // yellow = sampling
+                SampleData sd = recordSignal();
+                sendData(sd.num_samples, sd.actual_sample_rate);
+
+                // Begin non-blocking cool-down; Pi can send next config now.
+                setRGBLEDColor(50, 50, 200);   // blue = cooling
+                state_start_ms = millis();
+                measurement_state = STATE_COOLING;
+            }
+            break;
+
+        case STATE_COOLING:
+            if (millis() - state_start_ms >= (unsigned long)cool_down_period) {
+                setRGBLEDColor(50, 200, 50);   // green = ready
+                measurement_state = STATE_IDLE;
+                // If the Pi sent EXECU while we were cooling, start immediately.
+                if (measurement_requested) {
+                    measurement_requested = false;
+                    startMeasurement();
+                }
+            }
+            break;
+    }
 }
-void setRGBLEDColor(int r, int g, int b) {
-  // Set the RGB LED to the color given by r, g and b in the range 1-255
 
-  analogWrite(LED_RED_PIN, r);
-  analogWrite(LED_GREEN_PIN, g);
-  analogWrite(LED_BLUE_PIN, b);
+// ── startMeasurement() ───────────────────────────────────────────────────────
+
+void startMeasurement() {
+    if (measurement_state != STATE_IDLE) {
+        Serial.println(F("ERR: busy"));
+        return;
+    }
+    setRGBLEDColor(200, 50, 30);   // red = polarising
+    digitalWrite(COIL_PIN, LOW);   // energise coil
+    state_start_ms    = millis();
+    measurement_state = STATE_POLARISING;
 }
 
+// ── processCommand() ─────────────────────────────────────────────────────────
 
 void processCommand() {
-  // Process a command received by Serial
-  // Commands are of the form XXXXX NNNNNN where XXXXX is a five character opcode and NNNNNN is an integer
-  memset(serial_buff, 0, SERIAL_BUFF_LEN);
+    // Read one newline-terminated command into serial_buff.
+    // readBytesUntil() returns 0 on timeout (200 ms, set in setup()) so a
+    // partial or missing command never blocks indefinitely.
+    memset(serial_buff, 0, SERIAL_BUFF_LEN);
+    int len = Serial.readBytesUntil('\n', serial_buff, SERIAL_BUFF_LEN - 1);
+    if (len == 0) return;
 
-  bool done = false;
-  int char_cnt = 0;
-  int c;
-  int op;
+    // Trim trailing \r to handle Windows-style CRLF line endings.
+    if (serial_buff[len - 1] == '\r') len--;
+    serial_buff[len] = '\0';
 
-  while (not done) {
-    c = Serial.read();
-    if (c > 0) {
-      // Serial.println(c);
-      if (c == '\n') {
-        done = true;
-        //   Serial.println("Line end");
-      } else {
-
-        if (char_cnt == SERIAL_BUFF_LEN) {
-          done = true;
+    if (strncmp(serial_buff, "EXECU", 5) == 0) {
+        if (measurement_state == STATE_IDLE) {
+            Serial.println(F("OK EXECU"));
+            startMeasurement();
+        } else if (measurement_state == STATE_COOLING) {
+            // Queue the request; it will fire when cool-down ends.
+            Serial.println(F("OK EXECU"));
+            measurement_requested = true;
         } else {
-          serial_buff[char_cnt] = c;
-          char_cnt++;
+            Serial.println(F("ERR: busy"));
         }
-      }
-    }
-  }
-  // Serial.println(serial_buff);
-  if (strncmp(serial_buff, "EXECU", 5) == 0) {
-    // Execute the cycle
-    Serial.println("OK EXECU");
-    doMeasurement();
-  } else if (strncmp(serial_buff, "ONTIM", 5) == 0) {
-    // Coil activation time
-    op = getOp(serial_buff);
-    if (op >= 0) {
-      coil_activation_time = op;
-      Serial.print("OK ONTIM: ");
-      Serial.println(coil_activation_time);
-    }
-  } else if (strncmp(serial_buff, "SAMPT", 5) == 0) {
-    // Sample time
-    op = getOp(serial_buff);
-    if (op >= 0) {
-      sample_time = op;
-      Serial.print("OK SAMPT: ");
-      Serial.println(sample_time);
-    }
-  } else if (strncmp(serial_buff, "SAMRA", 5) == 0) {
-    // Sample rate
-    op = getOp(serial_buff);
-    if (op >= 0) {
-      sample_rate = op;
-      Serial.print("OK SAMRA: ");
-      Serial.println(sample_rate);
-    }
-  } else if (strncmp(serial_buff, "DELAY", 5) == 0) {
-    // Sample delay
-    op = getOp(serial_buff);
-    if (op >= 0) {
-      sample_delay = op;
-      Serial.print("OK DELAY: ");
-      Serial.println(sample_delay);
-    }
-  } else if (strncmp(serial_buff, "COOLD", 5) == 0) {
-    // Cool down period
-    op = getOp(serial_buff);
-    if (op >= 0) {
-      cool_down_period = op;
-      Serial.print("OK COOLDOWN: ");
-      Serial.println(cool_down_period);
-    }
-  } else if (strncmp(serial_buff, "READV", 5) == 0) {
-    // Command for debugging the ADC
-    uint16_t voltage_code = read_voltage();
-    float voltage = code_to_voltage(voltage_code, VREF);
 
-    Serial.print("Voltage = : ");
-    Serial.println(voltage);
-  } else {
-    Serial.print("Uknown command: ");
-    Serial.println(serial_buff);
-  }
+    } else if (strncmp(serial_buff, "ONTIM", 5) == 0) {
+        int op = getOp(serial_buff);
+        if (op > 0) {
+            coil_activation_time = op;
+            Serial.print(F("OK ONTIM: "));
+            Serial.println(coil_activation_time);
+        }
 
+    } else if (strncmp(serial_buff, "SAMPT", 5) == 0) {
+        int op = getOp(serial_buff);
+        if (op > 0) {
+            sample_time = op;
+            Serial.print(F("OK SAMPT: "));
+            Serial.println(sample_time);
+        }
 
+    } else if (strncmp(serial_buff, "SAMRA", 5) == 0) {
+        // NOTE: this value controls how many samples are collected
+        // (num_samples = sample_rate * sample_time / 1000), NOT the actual
+        // sample rate.  The loop runs as fast as SPI transactions allow; the
+        // true rate is measured via the RTC interrupt and reported back.
+        int op = getOp(serial_buff);
+        if (op > 0) {
+            sample_rate = op;
+            Serial.print(F("OK SAMRA: "));
+            Serial.println(sample_rate);
+        }
 
-  return;
+    } else if (strncmp(serial_buff, "DELAY", 5) == 0) {
+        int op = getOp(serial_buff);
+        if (op >= 0) {
+            sample_delay = op;
+            Serial.print(F("OK DELAY: "));
+            Serial.println(sample_delay);
+        }
+
+    } else if (strncmp(serial_buff, "COOLD", 5) == 0) {
+        int op = getOp(serial_buff);
+        if (op >= 0) {
+            cool_down_period = op;
+            Serial.print(F("OK COOLD: "));
+            Serial.println(cool_down_period);
+        }
+
+    } else if (strncmp(serial_buff, "READV", 5) == 0) {
+        // Debug: read one ADC sample and print as voltage.
+        // VREF = 20 V (LTC1855 ±10 V differential range).
+        uint16_t raw     = (uint16_t)read_voltage();
+        float    voltage = code_to_voltage(raw, VREF);
+        Serial.print(F("Voltage: "));
+        Serial.println(voltage);
+
+    } else {
+        Serial.print(F("Unknown command: "));
+        Serial.println(serial_buff);
+    }
 }
 
-int getOp(const char* buff) {
-  // Extracts the integer operand from the input string. Returns -1 if it's not present
-  if (strlen(buff) > 7) {
-    return atoi(&buff[5]);
-  } else {
+// ── getOp() ──────────────────────────────────────────────────────────────────
+
+int getOp(const char *buff) {
+    // Extract the integer operand from "XXXXX NNNN".
+    // The operand starts at index 6 (past the 5-char opcode and one space).
+    // atoi() handles the conversion; it returns 0 for missing/non-numeric input.
+    if ((int)strlen(buff) > 6) {
+        return atoi(&buff[6]);
+    }
     return -1;
-  }
 }
 
-void doMeasurement() {
-  // Activates the coil, waits for the delay time and then records a signal
-  SampleData sd;
+// ── recordSignal() ───────────────────────────────────────────────────────────
 
-  setRGBLEDColor(200, 50, 30);
-  digitalWrite(COIL_PIN, LOW);
+SampleData recordSignal() {
+    // Collect ADC samples into SRAM as fast as the SPI bus allows, then
+    // compute the actual sample rate from the elapsed RTC-interrupt count.
+    //
+    // The LTC1855 outputs signed 16-bit two's complement values.  They are
+    // stored as raw bytes (big-endian uint16_t) and the Pi reconstructs the
+    // signed value on readback.
+    //
+    // sample_rate here is only a target used to decide how many samples to
+    // collect.  The loop has no timer-based pacing; the actual rate depends on
+    // SPI transaction overhead and is typically close to (but not exactly) the
+    // requested value.
 
-  delay(coil_activation_time);
+    unsigned long num_samples =
+        ((unsigned long)sample_rate * (unsigned long)sample_time) / 1000UL;
 
-  digitalWrite(COIL_PIN, HIGH);
+    // Guard against SRAM overflow: 23LC1024 = 128 KB = 65 536 uint16_t samples.
+    if (num_samples > MAX_SAMPLES) {
+        num_samples = MAX_SAMPLES;
+    }
 
-  // Wait delay time:
-  setRGBLEDColor(200, 50, 200);
-  delay(sample_delay);
+    // Set SRAM to sequential access mode.  Although each sample write uses an
+    // individual CS pulse (necessary because ADC reads interleave on the same
+    // SPI bus), sequential mode avoids mode-register overhead between transactions.
+    digitalWrite(SRAM_CS_PIN, LOW);
+    SPI.transfer(WRMR);        // write mode register
+    SPI.transfer(Sequential);  // sequential access
+    digitalWrite(SRAM_CS_PIN, HIGH);
 
-  setRGBLEDColor(200, 200, 50);
-  // record signal and send to Raspberry pi
+    // Dummy read to flush any stale conversion result held in the LTC1855
+    // output register before the timed sampling loop begins.
+    (void)read_voltage();
 
-  sd = recordSignal();
+    // Start counting 32.768 kHz RTC edges for elapsed-time measurement.
+    interrupt_counter = 0;
+    attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), timer_isr, RISING);
 
-  // sendData to the RPi
-  sendData(sd.num_samples, sd.actual_sample_rate);
+    uint32_t address = 0;
+    uint8_t  temp[2];
 
-  setRGBLEDColor(50, 50, 200);
-  delay(cool_down_period);
+    for (unsigned long i = 0; i < num_samples; i++) {
+        int16_t voltage = read_voltage();
 
-  setRGBLEDColor(50, 200, 50);
+        // Store as big-endian bytes.  The sign bit is preserved in the raw
+        // bit pattern; the Pi casts back to int16_t when it reads the data.
+        temp[0] = (uint8_t)((uint16_t)voltage >> 8);  // high byte
+        temp[1] = (uint8_t)voltage;                   // low byte
 
-  return;
+        // Direct PORTB manipulation rather than digitalWrite() to minimise
+        // per-sample overhead in the tight loop.
+        // SRAM_CS_PIN = 10 = PB2: clear bit 2 for CS-low, set for CS-high.
+        PORTB &= B11111011;                        // CS low
+        SPI.transfer(WRITE);                       // WRITE command
+        SPI.transfer((uint8_t)(address >> 16));    // address MSB
+        SPI.transfer((uint8_t)(address >> 8));     // address mid
+        SPI.transfer((uint8_t)address);            // address LSB
+        SPI.transfer(temp, 2);                     // two data bytes
+        PORTB |= B00000100;                        // CS high
+
+        address += 2;
+    }
+
+    detachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN));
+
+    // interrupt_counter = number of 32.768 kHz rising edges during the loop.
+    // Dividing by RTC_FREQ_HZ gives elapsed seconds; then rate = n / t.
+    float         elapsed_secs    = (float)interrupt_counter / RTC_FREQ_HZ;
+    unsigned long actual_rate     = (elapsed_secs > 0.0f)
+                                    ? (unsigned long)((float)num_samples / elapsed_secs)
+                                    : (unsigned long)sample_rate;  // fallback if RTC silent
+
+    SampleData sd;
+    sd.num_samples        = num_samples;
+    sd.actual_sample_rate = actual_rate;
+    return sd;
 }
 
-SampleData recordSignal()
-// Record a sample at the current rate for the current time.
-// Data is stored in SRAM and later transferred to the Raspberry PI by Serial
-// Returns the number of data sampled and the *actual* sample rate
-{
-
-  uint32_t address = 0;
-
-
-
-  unsigned long num_samples = ((unsigned long)sample_rate * (unsigned long)sample_time) / 1000;
-
-  uint16_t voltage = read_voltage();  // Start ADC reading
-  byte temp[2];
-  
-
-
-  // Put memory into write mode:
-  pinMode(CSPIN, OUTPUT);    // set CS pin to output mode
-  digitalWrite(CS, LOW);     // set SPI slave select LOW
-  SPI.transfer(WRMR);        // command to write to mode register
-  SPI.transfer(Sequential);  // set for sequential mode
-  digitalWrite(CSPIN, HIGH);
-
-
-
-  // Attach an interrupt timer
-  interrupt_counter = 0;
-  attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), timer_isr, RISING);
-
-  // Do a loop for the number of samples
-  for (unsigned long isample = 0; isample < num_samples; isample++) {
-    
-
-    voltage = read_voltage();
-
-    // sram.WriteInt(address, voltage);  // Don't use SRAM:
-    // Use expanded version direct for speed:
-    temp[0] = (byte)(voltage >> 8);       // high byte of integer
-    temp[1] = (byte)(voltage);            // low byte of integer
-    PORTB = PORTB & B11111011;            // start new command sequence (CS Pin low)
-    SPI.transfer(WRITE);                  // send WRITE command
-    SPI.transfer((byte)(address >> 16));  // send high byte of address
-    SPI.transfer((byte)(address >> 8));   // send middle byte of address
-    SPI.transfer((byte)address);          // send low byte of address
-    SPI.transfer(temp, 2);                // transfer an array of data => needs array name & size (2 elements)
-    PORTB = PORTB | B00000100;            // End with CSPin High
-
-    address += 2;
-
-    
-  }
-
-  detachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN));
-
-  float time_secs = interrupt_counter / 32768.0;  // time in seconds
-  
-
-  unsigned long actual_sample_rate = (unsigned long)((float)num_samples / time_secs);
- 
- 
-  SampleData sd;
-  sd.num_samples = num_samples;
-  sd.actual_sample_rate = actual_sample_rate;
-
-  return sd;
-}
-
-uint16_t read_voltage(void) {
-  // Query the external ADC to get the current voltage value
-  uint16_t adc_code;
-  uint16_t voltage;
-
-
-
-  adc_code = 0x0;  // Differential, ports one and two
-
-  spi_transfer_word(ADC_RD_PIN, adc_code, &voltage);
-
-  return voltage;
-}
+// ── sendData() ───────────────────────────────────────────────────────────────
 
 void sendData(unsigned long num_samples, unsigned long actual_sample_rate) {
-  // Send data via Serial to the RPi
-  int voltage;
-  Serial.println(actual_sample_rate);
-  Serial.println(num_samples);
-  uint32_t address = 0;
+    // Header lines match the format expected by PPMCalc.load_from_file():
+    //   Line 1: actual_sample_rate
+    //   Line 2: num_samples
+    Serial.println(actual_sample_rate);
+    Serial.println(num_samples);
 
-  for (unsigned long i = 0; i < num_samples; i++) {
-    voltage = sram.ReadInt(address);
-    address += 2;
-    Serial.println(voltage);
-  }
+    // Burst-read all samples from SRAM in one sequential transaction.
+    // Sequential mode is already configured from recordSignal().  Issuing a
+    // single READ command + start address and then clocking out all bytes
+    // avoids the per-sample command/address overhead of individual ReadInt()
+    // calls (~7 bytes overhead saved per sample).
+    digitalWrite(SRAM_CS_PIN, LOW);
+    SPI.transfer(READ);   // sequential read command (0x03)
+    SPI.transfer(0x00);   // 24-bit start address = 0x000000
+    SPI.transfer(0x00);
+    SPI.transfer(0x00);
+
+    for (unsigned long i = 0; i < num_samples; i++) {
+        uint8_t hi = SPI.transfer(0);
+        uint8_t lo = SPI.transfer(0);
+        // Reconstruct the signed 16-bit ADC value before printing.
+        int16_t value = (int16_t)(((uint16_t)hi << 8) | lo);
+        Serial.println(value);
+    }
+
+    digitalWrite(SRAM_CS_PIN, HIGH);
 }
 
-// Interrupt ISR - increments the counter
-void timer_isr(void) {
-  interrupt_counter += 1;
+// ── read_voltage() ───────────────────────────────────────────────────────────
+
+int16_t read_voltage() {
+    // Request one differential conversion from the LTC1855 and return the
+    // signed 16-bit result.  The LTC1855 output is two's complement:
+    // 0x7FFF = +VREF/2, 0x8000 = -VREF/2, 0x0000 = 0 V differential.
+    uint16_t raw = 0;
+    spi_transfer_word(ADC_CS_PIN, 0x0000, &raw);
+    return (int16_t)raw;
 }
 
-// Code below here is taken in part from Linduino: https://github.com/analogdevicesinc/Linduino/tree/master
-// Reads and sends a word
-// Return 0 if successful, 1 if failed
-void spi_transfer_word(uint8_t cs_pin, uint16_t tx, uint16_t* rx) {
-  union {
-    uint8_t b[2];
-    uint16_t w;
-  } data_tx;
+// ── spi_transfer_word() ──────────────────────────────────────────────────────
 
-  union {
-    uint8_t b[2];
-    uint16_t w;
-  } data_rx;
+void spi_transfer_word(uint8_t cs_pin, uint16_t tx, uint16_t *rx) {
+    // Send and receive one 16-bit word MSB-first over SPI.
+    // ADC_CS_PIN = 8 = PB0: direct PORTB manipulation avoids the ~4 µs
+    // overhead of digitalWrite() which matters in the tight sample loop.
+    //
+    // Adapted from Linduino (Analog Devices github.com/analogdevicesinc/Linduino).
+    // Corrected device reference: LTC1855 (not LTC1859 as in the original).
 
-  data_tx.w = tx;
+    union { uint8_t b[2]; uint16_t w; } data_tx, data_rx;
+    data_tx.w = tx;
 
-  //digitalWrite(cs_pin, LOW);  //! 1) Pull CS low
-  PORTB = PORTB & B11111110;
+    // ADC_CS_PIN = 8 = PB0: clear bit 0 for CS-low, set for CS-high.
+    PORTB &= B11111110;                             // CS low
+    data_rx.b[1] = SPI.transfer(data_tx.b[1]);     // MSB first
+    data_rx.b[0] = SPI.transfer(data_tx.b[0]);     // LSB second
+    PORTB |= B00000001;                             // CS high
 
-  data_rx.b[1] = SPI.transfer(data_tx.b[1]);  //! 2) Read MSB and send MSB
-  data_rx.b[0] = SPI.transfer(data_tx.b[0]);  //! 3) Read LSB and send LSB
-
-  *rx = data_rx.w;
-
-  //digitalWrite(cs_pin, HIGH);  //! 4) Pull CS high
-  PORTB = PORTB | B00000001;
+    *rx = data_rx.w;
 }
 
-// Calculates the LTC1859 input voltage given the data, vref
+// ── setRGBLEDColor() ─────────────────────────────────────────────────────────
+
+void setRGBLEDColor(int r, int g, int b) {
+    // Set LED colour using PWM.  Values 0–255: 0 = off, 255 = full brightness.
+    // Colour convention used in this sketch:
+    //   Green  = idle / ready
+    //   Red    = polarising
+    //   Purple = settling (transient decay)
+    //   Yellow = sampling
+    //   Blue   = cooling
+    analogWrite(LED_RED_PIN,   r);
+    analogWrite(LED_GREEN_PIN, g);
+    analogWrite(LED_BLUE_PIN,  b);
+}
+
+// ── timer_isr() ──────────────────────────────────────────────────────────────
+
+void timer_isr() {
+    // Counts rising edges of the 32.768 kHz RTC output.
+    // elapsed_seconds = interrupt_counter / 32768.0
+    interrupt_counter++;
+}
+
+// ── code_to_voltage() ────────────────────────────────────────────────────────
+
 float code_to_voltage(uint16_t adc_code, float vref) {
-  float voltage;
-  float sign = 1;
+    // Convert a raw LTC1855 ADC code to a floating-point voltage.
+    // Output encoding is 16-bit two's complement: bit 15 is the sign bit.
+    //   0x7FFF → +vref/2   (full-scale positive)
+    //   0x8000 → -vref/2   (full-scale negative)
+    //   0x0000 →  0 V
+    // With VREF = 20 V the usable range is ±10 V.
+    //
+    // Adapted from Linduino (Analog Devices github.com/analogdevicesinc/Linduino).
 
-
-  if ((adc_code & 0x8000) == 0x8000)  //adc code is < 0
-  {
-    adc_code = (adc_code ^ 0xFFFF) + 1;  //! Convert ADC code from two's complement to binary
-    sign = -1;
-  }
-  voltage = sign * (float)adc_code;
-  voltage = voltage / (pow(2, 15) - 1);  //! 2) This calculates the input as a fraction of the reference voltage (dimensionless)
-
-
-  voltage = voltage * vref;  //! 3) Multiply fraction by Vref to get the actual voltage at the input (in volts)
-
-  return (voltage);
+    float sign = 1.0f;
+    if (adc_code & 0x8000) {
+        adc_code = (adc_code ^ 0xFFFF) + 1;  // two's complement → magnitude
+        sign = -1.0f;
+    }
+    // Normalise to ±1 then scale by vref.
+    float voltage = sign * (float)adc_code / (float)((1UL << 15) - 1) * vref;
+    return voltage;
 }
