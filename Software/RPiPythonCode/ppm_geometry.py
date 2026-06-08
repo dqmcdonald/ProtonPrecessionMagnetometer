@@ -63,6 +63,79 @@ _DEFAULT_LON =  172.72553
 PROTON_GYRO_HZ_PER_T = 42.5775e6
 
 
+# ── Capacitor bank (book Table 5.1) ──────────────────────────────────────────
+
+# DIP switch capacitor values in µF.  Switches close in parallel, so the total
+# capacitance is the sum of the selected values.
+DIP_SWITCH_CAPS_UF = [
+    0.5600,   # switch  1
+    0.3900,   # switch  2
+    0.2200,   # switch  3
+    0.1000,   # switch  4
+    0.0560,   # switch  5
+    0.0390,   # switch  6
+    0.0220,   # switch  7
+    0.0100,   # switch  8
+    0.00560,  # switch  9
+    0.00390,  # switch 10
+    0.00220,  # switch 11
+    0.00100,  # switch 12
+]
+
+
+def recommend_capacitors(inductance_H, larmor_hz, caps_uF=None):
+    """Find the DIP switch combination that tunes the LC circuit to the Larmor frequency.
+
+    The sensor coil (total inductance L) and the selected capacitors (parallel
+    combination, total C = ΣC_i) form a series resonant circuit:
+
+        f_resonant = 1 / (2π√(LC))
+
+    Solving for the required capacitance:
+
+        C_target = 1 / (L · (2π · f)²)
+
+    With 12 binary switches there are 2¹²−1 = 4095 non-empty combinations;
+    exhaustive search finds the one whose resonant frequency is closest to the
+    target Larmor frequency.
+
+    Args:
+        inductance_H: Total coil inductance in Henrys (both coils in series).
+        larmor_hz:    Target resonant frequency in Hz.
+        caps_uF:      Available capacitor values in µF (default: Table 5.1).
+
+    Returns:
+        (target_C_uF, switch_list, achieved_C_uF, achieved_f_hz, error_hz)
+
+        target_C_uF:    Ideal capacitance in µF.
+        switch_list:    1-based switch numbers to close (list of int).
+        achieved_C_uF:  Total capacitance of the best combination in µF.
+        achieved_f_hz:  Resonant frequency of that combination in Hz.
+        error_hz:       achieved_f_hz − larmor_hz (positive = tuned above target).
+    """
+    if caps_uF is None:
+        caps_uF = DIP_SWITCH_CAPS_UF
+
+    omega = 2.0 * np.pi * larmor_hz
+    target_C_uF = 1e6 / (inductance_H * omega**2)   # µF
+
+    n = len(caps_uF)
+    best_switches = []
+    best_C_uF     = 0.0
+    best_err      = float('inf')
+
+    for mask in range(1, 1 << n):
+        C = sum(caps_uF[i] for i in range(n) if (mask >> i) & 1)
+        err = abs(C - target_C_uF)
+        if err < best_err:
+            best_err      = err
+            best_C_uF     = C
+            best_switches = [i + 1 for i in range(n) if (mask >> i) & 1]
+
+    f_achieved = 1.0 / (2.0 * np.pi * np.sqrt(inductance_H * best_C_uF * 1e-6))
+    return target_C_uF, best_switches, best_C_uF, f_achieved, f_achieved - larmor_hz
+
+
 # ── Magnetic field computation ────────────────────────────────────────────────
 
 def compute_field_params(lat_deg, lon_deg, alt_km=0.0):
@@ -136,7 +209,8 @@ def compute_field_params(lat_deg, lon_deg, alt_km=0.0):
 
 # ── Text explanation ──────────────────────────────────────────────────────────
 
-def print_explanation(I_deg, total_field_nT=None, lat_deg=None, lon_deg=None):
+def print_explanation(I_deg, total_field_nT=None, lat_deg=None, lon_deg=None,
+                       inductance_H=None):
     """Print a plain-text explanation of the coil orientation geometry.
 
     Derives all angles from the supplied inclination and explains both valid
@@ -212,6 +286,28 @@ def print_explanation(I_deg, total_field_nT=None, lat_deg=None, lon_deg=None):
     print("  Note: orientation affects signal strength only, NOT the")
     print("  measured field value. The Larmor frequency (and therefore")
     print("  the reported field in nT) is independent of coil orientation.")
+
+    if inductance_H is not None and total_field_nT is not None:
+        larmor = PROTON_GYRO_HZ_PER_T * total_field_nT * 1e-9
+        target_C_uF, switches, C_uF, f_hz, err_hz = recommend_capacitors(
+            inductance_H, larmor)
+
+        print()
+        print("LC circuit capacitor tuning")
+        print("-" * 60)
+        print(f"  Coil inductance      : {inductance_H * 1000:.2f} mH  (both coils in series)")
+        print(f"  Target frequency     : {larmor:.1f} Hz")
+        print(f"  Required capacitance : {target_C_uF:.4f} µF")
+        print()
+        sw_str   = ', '.join(str(s) for s in switches)
+        parts    = ' + '.join(f'{DIP_SWITCH_CAPS_UF[s-1]:.4f}' for s in switches)
+        print(f"  Best DIP combination : switch{'es' if len(switches) > 1 else ''} {sw_str}")
+        print(f"    {parts} = {C_uF:.4f} µF")
+        sign = '+' if err_hz >= 0 else ''
+        pct  = abs(err_hz) / larmor * 100
+        print(f"  Resonant frequency   : {f_hz:.1f} Hz  "
+              f"({sign}{err_hz:.1f} Hz, {pct:.3f}% error)")
+
     print("=" * 60)
     print()
 
@@ -580,6 +676,9 @@ def main():
                         "negative = Southern Hemisphere)")
     p.add_argument("--field", type=float, default=None, metavar="NT",
                    help="Override computed total field strength (nanoTesla)")
+    p.add_argument("--inductance", type=float, default=7.0, metavar="MH",
+                   help="Total sensor coil inductance in mH (both coils in series; "
+                        "book reference: ≈ 2×3.5 = 7.0 mH)")
     p.add_argument("--output", default="ppm_geometry.png", metavar="FILE",
                    help="Output PNG path")
     args = p.parse_args()
@@ -588,10 +687,12 @@ def main():
     computed_I, computed_F, method = compute_field_params(args.lat, args.lon)
     print(f"Field computation: {method}")
 
-    I_deg = args.inclination if args.inclination is not None else computed_I
-    F_nT  = args.field       if args.field       is not None else computed_F
+    I_deg       = args.inclination  if args.inclination is not None else computed_I
+    F_nT        = args.field        if args.field       is not None else computed_F
+    inductance_H = args.inductance * 1e-3   # mH → H
 
-    print_explanation(I_deg, total_field_nT=F_nT, lat_deg=args.lat, lon_deg=args.lon)
+    print_explanation(I_deg, total_field_nT=F_nT, lat_deg=args.lat, lon_deg=args.lon,
+                      inductance_H=inductance_H)
     draw_geometry(I_deg, args.output, lat_deg=args.lat, lon_deg=args.lon,
                   total_field_nT=F_nT)
 
