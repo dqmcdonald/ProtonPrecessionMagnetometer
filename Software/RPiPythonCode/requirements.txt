@@ -1,0 +1,30 @@
+
+This is Python code to control and analysis a Proton Precession Magnetometer (PPM). The script communicates
+with a microprocessor via a serial connection at 57000 baud rate.
+
+The microprocessor can receive various commands to set the endurance and so on of the magnetic pulse. Then when
+it receives the EXECU command it will magnetise the coil and measure the signal. This is returned via serial
+as follows. It's two integers - the number of samples and the sample rate then the data follows.
+
+It would be useful to modify the ppmrun.py script to do the following (via command line options)
+
+i) Do a data collection run, create a new directory in data/ called PPM_YYYY_MM_DD_HH_MM_SS/. All raw
+data and analysis will end up in that directory.
+
+ii) Have command line options to control the various PPM settings (duration etc)
+
+iii) Allow for a ---runs N option that will collect N data samples and average them in a sensible way in a single run.
+
+iv) Have command line options (with sensible defaults) for the frequency cuttoff
+
+v) Filter the data and perform an FFT
+
+vi) Be able to do the analysis without collecting data from the PPM - use a specified input file from a previous
+run (see examples in data/)
+
+vii) Optionally produce useful graphs of the data collected/analysed.
+
+viii) Ultimately we want to identify the strongest frequency peak (and maybe other candidates if there's noise)
+
+
+This will run on Raspberry Pi but additionaly packages can be installed if necessary.
