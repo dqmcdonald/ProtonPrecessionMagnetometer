@@ -40,10 +40,18 @@
  *   SRAM: 23LC1024 — 128 KB SPI SRAM (65 536 uint16_t samples maximum)
  *   RTC:  32.768 kHz square wave; rising edges counted to measure elapsed time
  *
- * Serial protocol (ASCII, '\n'-terminated):
- *   Commands  "XXXXX NNNN\n" — 5-char opcode, optional integer parameter
- *   Responses "OK XXXXX: N\n" on success; "ERR: ...\n" on error
- *   Data      actual_sample_rate\n  num_samples\n  sample_0\n  sample_1\n ...
+ * Serial protocol:
+ *   Command/control is ASCII, '\n'-terminated:
+ *     Commands  "XXXXX NNNN\n" — 5-char opcode, optional integer parameter
+ *     Responses "OK XXXXX: N\n" on success; "ERR: ...\n" on error
+ *
+ *   Measurement data is sent as a single binary frame (little-endian) for
+ *   speed and reliability — roughly 3× fewer bytes than the old line-based
+ *   ASCII format and no per-sample text parsing on the Pi:
+ *     bytes 0-3  : marker 'P','P','M','D'
+ *     bytes 4-7  : actual_sample_rate (uint32)
+ *     bytes 8-11 : num_samples        (uint32)
+ *     then num_samples × int16 samples (signed two's complement)
  *
  * Libraries: Bounce2, SRAMsimple
  * Quentin McDonald, October 2024
@@ -143,6 +151,7 @@ void          processCommand();
 void          startMeasurement();
 SampleData    recordSignal();
 void          sendData(unsigned long num_samples, unsigned long actual_sample_rate);
+void          writeUint32LE(uint32_t value);
 int16_t       read_voltage();
 void          spi_transfer_word(uint8_t cs_pin, uint16_t tx, uint16_t *rx);
 float         code_to_voltage(uint16_t adc_code, float vref);
@@ -464,11 +473,19 @@ SampleData recordSignal() {
 // ── sendData() ───────────────────────────────────────────────────────────────
 
 void sendData(unsigned long num_samples, unsigned long actual_sample_rate) {
-    // Header lines match the format expected by PPMCalc.load_from_file():
-    //   Line 1: actual_sample_rate
-    //   Line 2: num_samples
-    Serial.println(actual_sample_rate);
-    Serial.println(num_samples);
+    // Send the measurement as one binary frame (little-endian).  Only the bulk
+    // data transfer is binary; command/control responses remain ASCII.
+    //
+    //   bytes 0-3  : marker 'P','P','M','D'   (lets the Pi resync on the frame)
+    //   bytes 4-7  : actual_sample_rate (uint32)
+    //   bytes 8-11 : num_samples        (uint32)
+    //   then num_samples × int16 samples (signed two's complement)
+    Serial.write('P');
+    Serial.write('P');
+    Serial.write('M');
+    Serial.write('D');
+    writeUint32LE((uint32_t)actual_sample_rate);
+    writeUint32LE((uint32_t)num_samples);
 
     // Burst-read all samples from SRAM in one sequential transaction.
     // Sequential mode is already configured from recordSignal().  Issuing a
@@ -482,14 +499,24 @@ void sendData(unsigned long num_samples, unsigned long actual_sample_rate) {
     SPI.transfer(0x00);
 
     for (unsigned long i = 0; i < num_samples; i++) {
-        uint8_t hi = SPI.transfer(0);
+        uint8_t hi = SPI.transfer(0);   // SRAM holds samples big-endian
         uint8_t lo = SPI.transfer(0);
-        // Reconstruct the signed 16-bit ADC value before printing.
-        int16_t value = (int16_t)(((uint16_t)hi << 8) | lo);
-        Serial.println(value);
+        // Emit each sample little-endian (low byte first) on the wire.
+        Serial.write(lo);
+        Serial.write(hi);
     }
 
     digitalWrite(SRAM_CS_PIN, HIGH);
+}
+
+// ── writeUint32LE() ──────────────────────────────────────────────────────────
+
+void writeUint32LE(uint32_t value) {
+    // Write a 32-bit value to the serial port, least-significant byte first.
+    Serial.write((uint8_t)(value));
+    Serial.write((uint8_t)(value >> 8));
+    Serial.write((uint8_t)(value >> 16));
+    Serial.write((uint8_t)(value >> 24));
 }
 
 // ── read_voltage() ───────────────────────────────────────────────────────────
