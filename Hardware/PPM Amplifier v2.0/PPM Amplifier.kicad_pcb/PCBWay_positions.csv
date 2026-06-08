@@ -1,0 +1,37 @@
+﻿pos_x,pos_y,rotation,side,designator,mpn,pack,footprint,value,mount_type
+54.25,-29.275,0.0,top,C1,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.56uf,smt
+54.1875,-52.2,0.0,top,C10,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.0039uF,smt
+54.225,-54.65,0.0,top,C11,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.0022uF,smt
+54.3,-57.3,0.0,top,C12,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.001uF,smt
+103.0725,-62.9225,180.0,top,C13,,,CP_Elec_5x3,10uF,smt
+91.5475,-62.8975,180.0,top,C14,,,CP_Elec_5x3,10uF,smt
+104.4975,-55.9725,180.0,top,C15,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,100nf,smt
+89.8725,-56.2475,180.0,top,C16,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,100nF,smt
+120.2875,-48.425,0.0,top,C17,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,1uF,smt
+54.275,-31.875,0.0,top,C2,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.39uF,smt
+54.3,-34.45,0.0,top,C3,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.22uF,smt
+54.3,-37.0,0.0,top,C4,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.1uF,smt
+54.325,-39.575,0.0,top,C5,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.056uF,smt
+54.3,-42.0,0.0,top,C6,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.039uF,smt
+54.275,-44.4,0.0,top,C7,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.022uF,smt
+54.3375,-47.025,0.0,top,C8,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.01uF,smt
+54.2125,-49.475,0.0,top,C9,,,C_0805_2012Metric_Pad1.18x1.45mm_HandSolder,0.0056,smt
+135.625,-27.35,180.0,top,D1,,,D_DO-41_SOD81_P7.62mm_Horizontal,9.1V,tht
+139.905,-27.35,0.0,top,D2,,,D_DO-41_SOD81_P7.62mm_Horizontal,9.1V,tht
+94.235,-71.61,90.0,top,J1,,,PinHeader_1x03_P2.54mm_Vertical,Power In,tht
+32.32,-39.4975,0.0,top,J2,,,PinHeader_1x03_P2.54mm_Vertical,Signal In,tht
+85.025,-27.1,90.0,top,J3,,,PinHeader_1x02_P2.54mm_Vertical,TP1,tht
+101.4,-26.925,-90.0,top,J4,,,PinHeader_1x02_P2.54mm_Vertical,TP2,tht
+121.675,-41.35,90.0,top,J5,,,PinHeader_1x02_P2.54mm_Vertical,TP3,tht
+119.5,-71.475,0.0,top,J6,,,PinHeader_2x01_P2.54mm_Vertical,Power LED,tht
+153.375,-42.55,0.0,top,P2,,,PinHeader_1x02_P2.54mm_Vertical,Signal Out,tht
+71.52,-33.3225,0.0,top,R1,,,R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,5.11 1%,smt
+110.675,-33.4,0.0,top,R2,,,R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,5.11 1%,smt
+126.525,-48.5,0.0,top,R3,,,R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,10.2K 1%,smt
+138.13,-32.7,0.0,top,R4,,,R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,10.2K 1%,smt
+111.45,-71.175,0.0,top,R5,,,R_0805_2012Metric_Pad1.20x1.40mm_HandSolder,330 Ohm,smt
+43.87,-43.3,0.0,top,SW1,,,SW_DIP_SPSTx12_Slide_6.7x32.04mm_W8.61mm_P2.54mm_LowProfile,SW_DIP_x12,smt
+84.825,-38.25,0.0,top,T1,,,Transformer_42TL016,42TL016,tht
+71.07,-42.6175,0.0,top,U1,,,SOIC-16W_7.5x10.3mm_P1.27mm,~,smt
+110.37,-42.0875,0.0,top,U2,,,SOIC-16W_7.5x10.3mm_P1.27mm,~,smt
+134.155,-38.375,0.0,top,U3,,,DIP-8_W7.62mm_LongPads,OP177G,tht
