@@ -33,13 +33,15 @@ rate, then number of samples) followed by one ADC integer per line.
 """
 
 import serial
+import serial.tools.list_ports
 import time
 import numpy as np
 
 
 # ── Serial port configuration ─────────────────────────────────────────────────
 
-BAUD_RATE = 57600  # Must match the baud rate compiled into the Arduino firmware.
+BAUD_RATE = 57600        # Must match the baud rate compiled into the Arduino firmware.
+DEFAULT_PORT = '/dev/serial0'  # Raspberry Pi hardware UART; override with --port.
 
 # ── Arduino command strings ───────────────────────────────────────────────────
 # Each command is a 5-character token.  The Arduino parser matches on these
@@ -81,6 +83,28 @@ DELAY_DEFAULT = 500           # ms
 COOL_DOWN_DEFAULT = 10000     # ms
 
 
+def scan_ports():
+    """Return a list of available serial ports with their descriptions.
+
+    Uses pyserial's port enumeration to find all serial interfaces visible to
+    the OS.  On a Raspberry Pi the hardware UART appears as /dev/serial0 (or
+    /dev/ttyAMA0 / /dev/ttyS0 depending on model and config.txt settings).
+    USB-serial adapters appear as /dev/ttyUSB0 or /dev/ttyACM0.  On macOS
+    development machines they appear as /dev/tty.usbserial-XXXXX.
+
+    Each returned tuple contains:
+        (device, description, hwid)
+    where hwid includes the USB vendor:product ID for USB-serial adapters,
+    which can help identify an Arduino connected via USB.
+
+    Returns:
+        List of (device, description, hwid) tuples, one per available port.
+        Returns an empty list if no ports are found.
+    """
+    ports = serial.tools.list_ports.comports()
+    return [(p.device, p.description, p.hwid) for p in sorted(ports)]
+
+
 class PPMRun:
     """Controls the PPM hardware through a serial connection to the Arduino.
 
@@ -94,19 +118,22 @@ class PPMRun:
         rate = ppm.getActualSampleRate()   # Hz as measured by the Arduino
     """
 
-    def __init__(self, lg=None):
+    def __init__(self, lg=None, port=DEFAULT_PORT):
         """Open the serial port and initialise default hardware parameters.
 
         Args:
-            lg: A Python logging.Logger instance.  Pass None to suppress
-                logging (useful in tests).
+            lg:   A Python logging.Logger instance.  Pass None to suppress
+                  logging (useful in tests).
+            port: Serial port device path.  Defaults to DEFAULT_PORT
+                  (/dev/serial0).  Override with the --port CLI argument or
+                  use scan_ports() to discover available ports first.
 
-        Note: The serial port is opened immediately.  If /dev/serial0 is not
-        available (e.g. on a development PC) this will raise serial.SerialException.
-        The port buffers are flushed on open to discard any stale data from a
-        previous run.
+        Note: The serial port is opened immediately.  If the port does not
+        exist (e.g. on a development PC without the Arduino connected) this
+        will raise serial.SerialException.  The port buffers are flushed on
+        open to discard any stale data from a previous run.
         """
-        self._ser = serial.Serial('/dev/serial0', BAUD_RATE, timeout=1)
+        self._ser = serial.Serial(port, BAUD_RATE, timeout=1)
         # Flush both buffers in case there is leftover data from a previous
         # session or a crashed run.
         self._ser.reset_input_buffer()

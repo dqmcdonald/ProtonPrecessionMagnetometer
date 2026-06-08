@@ -9,9 +9,13 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-# Stub out the serial module so PPM can be imported without pyserial installed
+# Stub out pyserial and its submodules so PPM can be imported without pyserial.
+# All three entries are needed: 'import serial', 'import serial.tools', and
+# 'import serial.tools.list_ports' each look up their own key in sys.modules.
 _serial_stub = MagicMock()
 sys.modules.setdefault('serial', _serial_stub)
+sys.modules.setdefault('serial.tools', MagicMock())
+sys.modules.setdefault('serial.tools.list_ports', MagicMock())
 
 import PPM  # noqa: E402 — must come after the stub
 

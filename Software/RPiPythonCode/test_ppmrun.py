@@ -65,6 +65,18 @@ class TestArgumentParser(unittest.TestCase):
         args = self.parse([])
         self.assertFalse(args.verbose)
 
+    def test_port_default(self):
+        args = self.parse([])
+        self.assertEqual(args.port, "/dev/serial0")
+
+    def test_port_flag(self):
+        args = self.parse(["--port", "/dev/ttyUSB0"])
+        self.assertEqual(args.port, "/dev/ttyUSB0")
+
+    def test_list_ports_flag(self):
+        args = self.parse(["--list-ports"])
+        self.assertTrue(args.list_ports)
+
     def test_hardware_timing_flags(self):
         args = self.parse(["--on-time", "3000", "--sample-time", "1000",
                            "--sample-rate", "8000", "--delay", "200",

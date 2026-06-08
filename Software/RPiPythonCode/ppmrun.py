@@ -59,6 +59,17 @@ def build_parser():
     p = argparse.ArgumentParser(
         description="Proton Precession Magnetometer data collection and analysis")
 
+    # ── Serial port ───────────────────────────────────────────────────────────
+    p.add_argument("--port", default="/dev/serial0", metavar="DEV",
+                   help="Serial port connected to the Arduino, e.g. "
+                        "/dev/ttyUSB0 or /dev/ttyAMA0.  Use --list-ports "
+                        "to see available ports (default: /dev/serial0)")
+
+    p.add_argument("--list-ports", action="store_true",
+                   help="Scan and print all available serial ports, then exit. "
+                        "Useful for finding the correct --port value when the "
+                        "Arduino is connected via USB-serial adapter.")
+
     # ── Run control ───────────────────────────────────────────────────────────
     p.add_argument("--input", metavar="FILE",
                    help="Analyse an existing data file instead of collecting "
@@ -178,7 +189,7 @@ def collect_runs(args, run_dir, logger, verbose=False):
 
     PPM is imported here rather than at module level so that the module can be
     imported (for testing, re-analysis, etc.) on machines where pyserial is not
-    installed or /dev/serial0 does not exist.
+    installed or the serial port does not exist.
 
     Each run is saved to its own numbered .dat file so that individual cycles
     can be inspected separately if needed.
@@ -192,11 +203,11 @@ def collect_runs(args, run_dir, logger, verbose=False):
     Returns:
         List of (sample_rate, sample_time_ms, signal_data) tuples, one per run.
     """
-    import PPM   # deferred import — requires pyserial and /dev/serial0
+    import PPM   # deferred import — requires pyserial and a live serial port
 
     results = []
-    vprint("Opening serial port /dev/serial0 at {} baud".format(PPM.BAUD_RATE), verbose)
-    ppm = PPM.PPMRun(logger)
+    vprint("Opening serial port {} at {} baud".format(args.port, PPM.BAUD_RATE), verbose)
+    ppm = PPM.PPMRun(logger, port=args.port)
     ppm.configure(
         on_time=args.on_time,
         sample_time=args.sample_time,
@@ -399,6 +410,19 @@ def main():
     """Parse arguments, set up the run directory, and execute the pipeline."""
     parser = build_parser()
     args = parser.parse_args()
+
+    # --list-ports: scan and print available serial ports, then exit.
+    if args.list_ports:
+        import PPM
+        ports = PPM.scan_ports()
+        if not ports:
+            print("No serial ports found.")
+        else:
+            print("{:<20} {:<35} {}".format("Port", "Description", "Hardware ID"))
+            print("-" * 80)
+            for device, description, hwid in ports:
+                print("{:<20} {:<35} {}".format(device, description, hwid))
+        sys.exit(0)
 
     # Warn if the user specified both --input and --runs, since --runs is
     # meaningless when loading from a file (there is only one data set).
