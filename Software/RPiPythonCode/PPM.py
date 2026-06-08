@@ -33,7 +33,6 @@ rate, then number of samples) followed by one ADC integer per line.
 """
 
 import serial
-import serial.tools.list_ports
 import time
 import numpy as np
 
@@ -100,7 +99,16 @@ def scan_ports():
     Returns:
         List of (device, description, hwid) tuples, one per available port.
         Returns an empty list if no ports are found.
+
+    Raises:
+        ImportError: if pyserial is not installed or serial.tools is missing.
     """
+    try:
+        import serial.tools.list_ports
+    except ImportError:
+        raise ImportError(
+            "serial.tools.list_ports not found. "
+            "Install or upgrade pyserial:  pip install --upgrade pyserial")
     ports = serial.tools.list_ports.comports()
     return [(p.device, p.description, p.hwid) for p in sorted(ports)]
 

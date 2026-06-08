@@ -414,7 +414,11 @@ def main():
     # --list-ports: scan and print available serial ports, then exit.
     if args.list_ports:
         import PPM
-        ports = PPM.scan_ports()
+        try:
+            ports = PPM.scan_ports()
+        except ImportError as e:
+            print("Error: {}".format(e), file=sys.stderr)
+            sys.exit(1)
         if not ports:
             print("No serial ports found.")
         else:
