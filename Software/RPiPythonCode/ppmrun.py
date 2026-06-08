@@ -114,6 +114,10 @@ def build_parser():
                         "to suppress noise peaks (default: 0.0005)")
 
     # ── Output control ────────────────────────────────────────────────────────
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="Print progress messages to stdout at each pipeline "
+                        "step (hardware commands, filter, FFT, peak detection)")
+
     p.add_argument("--no-plots", action="store_true",
                    help="Skip generating PNG graph files (faster; useful when "
                         "running many automated measurements)")
@@ -163,7 +167,13 @@ def setup_logger(run_dir):
     return logger
 
 
-def collect_runs(args, run_dir, logger):
+def vprint(msg, verbose):
+    """Print msg to stdout only when verbose mode is enabled."""
+    if verbose:
+        print(msg)
+
+
+def collect_runs(args, run_dir, logger, verbose=False):
     """Perform N hardware measurement cycles and return the results.
 
     PPM is imported here rather than at module level so that the module can be
@@ -177,6 +187,7 @@ def collect_runs(args, run_dir, logger):
         args:    Parsed argparse namespace with hardware timing attributes.
         run_dir: Directory where data files will be saved.
         logger:  Logger instance for progress messages.
+        verbose: If True, print progress to stdout.
 
     Returns:
         List of (sample_rate, sample_time_ms, signal_data) tuples, one per run.
@@ -184,6 +195,7 @@ def collect_runs(args, run_dir, logger):
     import PPM   # deferred import — requires pyserial and /dev/serial0
 
     results = []
+    vprint("Opening serial port /dev/serial0 at {} baud".format(PPM.BAUD_RATE), verbose)
     ppm = PPM.PPMRun(logger)
     ppm.configure(
         on_time=args.on_time,
@@ -191,16 +203,30 @@ def collect_runs(args, run_dir, logger):
         sample_rate=args.sample_rate,
         delay=args.delay,
         cool_down=args.cool_down)
+    vprint("Hardware configured: on_time={}ms  sample_time={}ms  "
+           "sample_rate={}Hz  delay={}ms  cool_down={}ms".format(
+               args.on_time, args.sample_time, args.sample_rate,
+               args.delay, args.cool_down), verbose)
 
     for i in range(args.runs):
         logger.info("Starting run {}/{}".format(i + 1, args.runs))
+        vprint("\n[Run {}/{}] Sending configuration to Arduino...".format(
+            i + 1, args.runs), verbose)
         # Re-send configured values before each run in case the Arduino was
         # reset or powered off between runs.
         ppm.sendConfiguredValues()
+        vprint("[Run {}/{}] Polarising coil for {} ms...".format(
+            i + 1, args.runs, args.on_time), verbose)
         out_path = os.path.join(run_dir, "run_{:02d}.dat".format(i))
         ppm.doMeasurement(output_path=out_path)
+        actual_rate = ppm.getActualSampleRate()
+        n_samples = len(ppm.getSignalData())
+        vprint("[Run {}/{}] Sampling complete: {} samples at {} Hz  →  {:.2f} s window".format(
+            i + 1, args.runs, n_samples, actual_rate,
+            n_samples / actual_rate), verbose)
+        vprint("[Run {}/{}] Data saved to {}".format(i + 1, args.runs, out_path), verbose)
         results.append((
-            ppm.getActualSampleRate(),
+            actual_rate,
             ppm.getSampleTime(),
             ppm.getSignalData().copy()))   # copy so the array is not aliased
         logger.info("Run {}/{} complete, saved to {}".format(i + 1, args.runs, out_path))
@@ -228,7 +254,7 @@ def load_input_file(filepath):
     return [(sample_rate, sample_time_ms, signal_data)]
 
 
-def analyse(runs_data, args, run_dir):
+def analyse(runs_data, args, run_dir, verbose=False):
     """Filter signals, average periodograms across all runs, and find peaks.
 
     For each run:
@@ -259,19 +285,33 @@ def analyse(runs_data, args, run_dir):
     f_axis = None         # frequency axis (same for all runs at the same rate)
     n_runs = len(runs_data)
 
+    vprint("\nAnalysis pipeline ({} run{})".format(n_runs, "s" if n_runs > 1 else ""), verbose)
+
     for i, (sample_rate, sample_time, signal_data) in enumerate(runs_data):
+        vprint("  [{}] Normalising signal ({} samples at {} Hz)...".format(
+            i, len(signal_data), sample_rate), verbose)
         calc = PPMCalc.PPMCalc(sample_rate, sample_time, signal_data)
 
         if not args.no_plots:
-            calc.plotSignal(os.path.join(run_dir, "original_{:02d}.png".format(i)))
+            path = os.path.join(run_dir, "original_{:02d}.png".format(i))
+            vprint("  [{}] Saving raw signal plot → {}".format(i, path), verbose)
+            calc.plotSignal(path)
 
+        vprint("  [{}] Applying Butterworth bandpass filter "
+               "{:.0f}–{:.0f} Hz...".format(i, args.low_freq, args.high_freq), verbose)
         calc.filterSignal(args.low_freq, args.high_freq)
 
         if not args.no_plots:
-            calc.plotSignal(os.path.join(run_dir, "filtered_{:02d}.png".format(i)))
+            path = os.path.join(run_dir, "filtered_{:02d}.png".format(i))
+            vprint("  [{}] Saving filtered signal plot → {}".format(i, path), verbose)
+            calc.plotSignal(path)
 
         # Compute periodogram on the filtered signal.  The frequency resolution
         # is sample_rate / num_samples ≈ 1 Hz for a 16000-sample, 1-second record.
+        freq_resolution = sample_rate / len(signal_data)
+        vprint("  [{}] Computing periodogram (frequency resolution {:.2f} Hz "
+               "≈ {:.1f} nT)...".format(i, freq_resolution,
+               freq_resolution / GAMMA_HZ_PER_UT * 1000), verbose)
         f, den = sig.periodogram(calc._signal_data, calc._sample_rate)
         if averaged_den is None:
             averaged_den = den.copy()
@@ -281,6 +321,9 @@ def analyse(runs_data, args, run_dir):
 
     # Divide by run count to get the true average (not just the sum).
     averaged_den /= n_runs
+    if n_runs > 1:
+        vprint("  Averaged {} periodograms (SNR improvement ≈ {:.1f}×)".format(
+            n_runs, n_runs ** 0.5), verbose)
 
     # ── Plot the averaged FFT ─────────────────────────────────────────────────
     import matplotlib
@@ -288,6 +331,7 @@ def analyse(runs_data, args, run_dir):
     import matplotlib.pyplot as plt
 
     fft_path = os.path.join(run_dir, "fft_averaged.png")
+    vprint("  Saving averaged FFT plot → {}".format(fft_path), verbose)
     # Scale Y axis to the tallest peak in the region of interest so the plot
     # is readable even when the absolute power is low.
     freq_mask = (f_axis >= args.low_freq) & (f_axis <= args.high_freq)
@@ -305,9 +349,13 @@ def analyse(runs_data, args, run_dir):
     # ── Peak detection ────────────────────────────────────────────────────────
     # find_peaks works on the full periodogram array, not just the plotted
     # window, to avoid missing a peak near the edge of the display range.
+    vprint("  Running peak detection (threshold={})...".format(
+        args.fft_threshold), verbose)
     peaks_idx, _ = sig.find_peaks(averaged_den, height=args.fft_threshold)
     peaks = sorted([(f_axis[p], averaged_den[p]) for p in peaks_idx],
                    key=lambda x: -x[1])
+    vprint("  Found {} peak{} above threshold".format(
+        len(peaks), "s" if len(peaks) != 1 else ""), verbose)
     return peaks
 
 
@@ -364,14 +412,16 @@ def main():
     logger.info("**********************************")
     logger.info("Beginning PPM Run")
     logger.info("Output directory: {}".format(run_dir))
+    vprint("Output directory: {}".format(run_dir), args.verbose)
 
     if args.input:
         logger.info("Reanalysis mode: loading {}".format(args.input))
+        vprint("Reanalysis mode: loading {}".format(args.input), args.verbose)
         runs_data = load_input_file(args.input)
     else:
-        runs_data = collect_runs(args, run_dir, logger)
+        runs_data = collect_runs(args, run_dir, logger, verbose=args.verbose)
 
-    peaks = analyse(runs_data, args, run_dir)
+    peaks = analyse(runs_data, args, run_dir, verbose=args.verbose)
     report_peaks(peaks, logger)
     print("Output written to: {}".format(run_dir))
 

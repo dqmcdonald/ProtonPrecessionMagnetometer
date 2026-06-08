@@ -57,6 +57,14 @@ class TestArgumentParser(unittest.TestCase):
         args = self.parse(["--no-plots"])
         self.assertTrue(args.no_plots)
 
+    def test_verbose_flag(self):
+        args = self.parse(["-v"])
+        self.assertTrue(args.verbose)
+
+    def test_verbose_default_false(self):
+        args = self.parse([])
+        self.assertFalse(args.verbose)
+
     def test_hardware_timing_flags(self):
         args = self.parse(["--on-time", "3000", "--sample-time", "1000",
                            "--sample-rate", "8000", "--delay", "200",
