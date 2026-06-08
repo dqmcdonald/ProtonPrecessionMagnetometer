@@ -89,12 +89,15 @@ def compute_field_params(lat_deg, lon_deg, alt_km=0.0):
     """
     try:
         import ppigrf
-        date = datetime.date.today()
+        # ppigrf compares the date against pandas Timestamps internally, so it
+        # needs datetime.datetime (not datetime.date) to avoid a TypeError.
+        date = datetime.datetime.now()
         # ppigrf.igrf(lon, lat, alt_km, date) → (Be, Bn, Bu) all in nT.
         # Bu is the upward component; inclination sign convention uses positive-down,
         # so Bdown = -Bu.
         Be, Bn, Bu = ppigrf.igrf(lon_deg, lat_deg, alt_km, date)
-        Be, Bn, Bu = float(Be), float(Bn), float(Bu)
+        # ppigrf may return 1-element numpy arrays; .item() extracts a Python scalar.
+        Be, Bn, Bu = np.asarray(Be).item(), np.asarray(Bn).item(), np.asarray(Bu).item()
         Bh   = np.sqrt(Be**2 + Bn**2)
         I_deg = float(np.degrees(np.arctan2(-Bu, Bh)))
         F_nT  = float(np.sqrt(Be**2 + Bn**2 + Bu**2))
