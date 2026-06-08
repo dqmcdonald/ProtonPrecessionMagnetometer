@@ -19,22 +19,42 @@ Measurement sequence
        f = γ · B / (2π)   where γ = 2.675 × 10⁸ rad/(s·T)
    For Earth's field (~57 µT) this is approximately 2435 Hz.
 6. Sampling continues for SAMPLE_TIME milliseconds at SAMPLE_RATE Hz.
-7. Arduino sends back the actual sample rate and sample count, then
-   transmits each ADC value on its own line.
+7. Arduino sends back the actual sample rate, the sample count, and all ADC
+   values as a single binary frame (see "Serial protocol" below).
 8. After sampling, the MOSFET is allowed to cool for COOL_DOWN milliseconds
    before another measurement can be requested.
 
 Serial protocol
 ---------------
-All commands are ASCII strings terminated with '\\n'.
-The Arduino echoes an acknowledgement on each command.
-On EXECU the Arduino eventually replies with two header lines (actual sample
-rate, then number of samples) followed by one ADC integer per line.
+Command/control is ASCII: all commands are strings terminated with '\\n' and
+the Arduino echoes an acknowledgement line on each command.
+
+Measurement data is returned as a single little-endian binary frame.  This is
+roughly 3× more compact than the old line-based ASCII format and removes
+per-sample text parsing, which matters for the tens of thousands of samples in
+a typical run.  After EXECU the Arduino eventually sends:
+
+    bytes 0-3  : marker b'PPMD'
+    bytes 4-7  : actual_sample_rate (uint32)
+    bytes 8-11 : num_samples        (uint32)
+    then num_samples × int16 samples (signed, two's complement)
+
+The on-disk ``.dat`` files remain plain text (see PPMCalc.load_from_file); only
+the over-the-wire transfer is binary.
 """
 
 import serial
+import struct
 import time
 import numpy as np
+
+
+# ── Binary data frame ─────────────────────────────────────────────────────────
+
+# Marker that precedes every binary measurement frame.  Lets the host resync to
+# the start of the data even if a stray byte (e.g. a late command ack) is left
+# in the serial buffer.
+DATA_MARKER = b"PPMD"
 
 
 # ── Serial port configuration ─────────────────────────────────────────────────
@@ -233,6 +253,55 @@ class PPMRun:
         resp = resp.decode('utf-8').strip()
         self.log("Received response: '{}'".format(resp))
 
+    def _read_exact(self, n):
+        """Read exactly n bytes from the serial port, blocking until they arrive.
+
+        pyserial's read(n) returns up to n bytes but may return fewer if its
+        timeout elapses mid-transfer.  This loops until all n bytes have been
+        collected, raising IOError if a read returns nothing (the Arduino has
+        gone silent), so a truncated frame fails fast rather than corrupting the
+        sample array.
+
+        Args:
+            n: Number of bytes to read.
+
+        Returns:
+            A bytes object of length n.
+
+        Raises:
+            IOError: if the serial port times out before n bytes are received.
+        """
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self._ser.read(n - len(buf))
+            if not chunk:
+                raise IOError(
+                    "Timed out reading binary data: expected {} bytes, "
+                    "got {}".format(n, len(buf)))
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def _sync_to_marker(self):
+        """Consume bytes from the serial port up to and including DATA_MARKER.
+
+        The marker lets the host find the start of the binary frame even if a
+        stray byte (such as a late command acknowledgement) precedes it.  Uses
+        a sliding window so the marker is detected at any byte offset.
+
+        Raises:
+            IOError: if the serial port times out before the marker is found.
+        """
+        window = bytearray()
+        while True:
+            byte = self._ser.read(1)
+            if not byte:
+                raise IOError("Timed out waiting for binary data marker")
+            window.extend(byte)
+            if len(window) > len(DATA_MARKER):
+                del window[0]
+            if window == DATA_MARKER:
+                return
+
     def sendCommand(self, command, value=None):
         """Format and send a command with an optional integer parameter.
 
@@ -307,33 +376,30 @@ class PPMRun:
         total_wait = (self._on_time + self._delay + self._sample_time + 2000) / 1000
         time.sleep(total_wait)
 
-        # The Arduino sends the actual sample rate first, then the number of
-        # samples actually collected.  The actual rate may differ from the
-        # requested rate due to timer quantisation in the Arduino firmware.
-        resp = self._ser.readline()
-        resp = resp.decode('utf-8').strip()
-        self._actual_sample_rate = int(resp)
+        # The measurement is returned as one binary frame:
+        #   marker b'PPMD', uint32 actual_sample_rate, uint32 num_samples,
+        #   then num_samples × int16 (all little-endian).
+        # The actual rate may differ from the requested rate due to timer
+        # quantisation in the Arduino firmware.
+        self._sync_to_marker()
+        header = self._read_exact(8)
+        self._actual_sample_rate, num_samples = struct.unpack("<II", header)
         self.log("Actual Sample Rate:  '{}' samples/s".format(self._actual_sample_rate))
-
-        resp = self._ser.readline()
-        resp = resp.decode('utf-8').strip()
-        num_samples = int(resp)
         self.log("Number of samples: '{}'".format(num_samples))
 
-        self._signal_data = np.zeros(num_samples)
+        raw = self._read_exact(num_samples * 2)
+        # Interpret the payload as signed little-endian 16-bit ADC counts.
+        # .copy() detaches the array from the read-only frombuffer backing
+        # buffer so downstream code can modify it freely.
+        self._signal_data = np.frombuffer(raw, dtype="<i2").astype(np.int64).copy()
 
-        # Read each ADC sample and write it to the output file simultaneously
-        # to avoid buffering all samples in memory before writing.
+        # The on-disk format stays plain text so PPMCalc.load_from_file() and
+        # the existing .dat data files are unaffected.  Header order is
+        # num_samples then actual_sample_rate, matching load_from_file().
         with open(output_path, mode='w', encoding="utf-8") as f:
-            # Header: num_samples then actual_sample_rate, matching the order
-            # expected by PPMCalc.load_from_file().
             f.write("{}\n".format(num_samples))
             f.write("{}\n".format(self._actual_sample_rate))
-
-            for i in range(num_samples):
-                resp = self._ser.readline()
-                resp = resp.decode('utf-8').strip()
-                self._signal_data[i] = int(resp)
-                f.write("{}\n".format(int(resp)))
+            for value in self._signal_data:
+                f.write("{}\n".format(int(value)))
 
         self.log("Received '{}' samples".format(num_samples))

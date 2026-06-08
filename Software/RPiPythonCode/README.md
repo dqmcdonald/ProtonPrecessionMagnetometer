@@ -158,6 +158,28 @@ All values are integers.  Files can be re-analysed at any time with `--input`.
 
 ---
 
+## Serial protocol
+
+Command and control is ASCII.  Each command is a 5-character token with an
+optional integer parameter, terminated by `\n` (e.g. `ONTIM 6000`), and the
+Arduino replies with an acknowledgement line.
+
+Measurement data, however, is returned as a single little-endian **binary**
+frame.  This is roughly 3× more compact than a line-based ASCII format and
+avoids per-sample text parsing for the tens of thousands of samples in a run:
+
+```
+bytes 0-3   marker  b'PPMD'
+bytes 4-7   actual_sample_rate  (uint32)
+bytes 8-11  num_samples         (uint32)
+then        num_samples × int16 samples (signed two's complement)
+```
+
+The on-disk `.dat` files remain plain text (see above); only the
+over-the-wire transfer is binary.
+
+---
+
 ## Geometry diagram
 
 ```bash
@@ -231,6 +253,7 @@ Importable functions:
 python -m unittest discover -v
 ```
 
-46 tests covering signal processing, file I/O, hardware communication (serial
-port mocked), CLI argument parsing, and the analysis pipeline.  The test suite
-runs without hardware and without `pyserial` installed.
+56 tests covering signal processing, file I/O, hardware communication (serial
+port mocked, including the binary data frame), CLI argument parsing, and the
+analysis pipeline.  The test suite runs without hardware and without `pyserial`
+installed.
