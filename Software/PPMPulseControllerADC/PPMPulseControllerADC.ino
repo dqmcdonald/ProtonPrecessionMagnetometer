@@ -134,7 +134,7 @@ char serial_buff[SERIAL_BUFF_LEN];
 // Measurement parameters — Pi overrides these before each run via commands.
 // Defaults match PPM.py defaults so a freshly powered Arduino behaves sensibly
 // even if the Pi does not send configuration.
-int coil_activation_time = 2000;   // ms  polarisation time (~2 × T1 for water)
+int coil_activation_time = 6000;   // ms  polarisation time (~2 × T1 for water)
 int sample_delay         = 500;    // ms  transient settle time after coil off
 int cool_down_period     = 10000;  // ms  MOSFET thermal recovery between runs
 int sample_rate          = 16000;  // used only to compute num_samples (see SAMRA note)
