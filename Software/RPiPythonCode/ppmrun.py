@@ -272,7 +272,7 @@ def load_input_file(filepath):
     return [(sample_rate, sample_time_ms, signal_data)]
 
 
-def analyse(runs_data, args, run_dir, verbose=False):
+def analyse(runs_data, args, run_dir, verbose=False, logger=None):
     """Filter signals, average periodograms across all runs, and find peaks.
 
     For each run:
@@ -280,7 +280,10 @@ def analyse(runs_data, args, run_dir, verbose=False):
     2. Optionally save a three-panel raw signal plot.
     3. Apply a Butterworth bandpass filter to reject out-of-band interference.
     4. Optionally save a three-panel filtered signal plot.
-    5. Compute the periodogram (power spectral density estimate).
+    5. Compute the periodogram (power spectral density estimate) with a Hann
+       window to reduce spectral leakage, and report the run's SNR — the
+       strongest in-band peak against the median noise floor ±100–300 Hz
+       either side of it.
 
     After processing all runs, the periodograms are averaged element-wise.
     Averaging in the frequency domain is preferred over averaging the raw
@@ -288,16 +291,24 @@ def analyse(runs_data, args, run_dir, verbose=False):
     to be phase-aligned between runs — a condition that cannot be guaranteed
     since the proton phase is random at the start of each precession cycle.
 
-    The averaged periodogram is then searched for peaks above the threshold.
+    The averaged periodogram is then searched for peaks above the threshold,
+    and each peak is refined to sub-bin precision by parabolic interpolation
+    (PPMCalc.interpolate_peak) — the raw bin width of ~0.67 Hz corresponds to
+    ~16 nT, so interpolation matters for the reported field value.
 
     Args:
         runs_data: List of (sample_rate, sample_time_ms, signal_data) tuples.
         args:      Parsed argparse namespace with analysis parameters.
         run_dir:   Directory where output files are written.
+        verbose:   If True, print pipeline progress to stdout.
+        logger:    Optional logging.Logger for per-run SNR records.
 
     Returns:
-        List of (freq_hz, magnitude) tuples sorted by magnitude descending.
-        peaks[0] is the strongest Larmor frequency candidate.
+        (peaks, snr) where peaks is a list of (freq_hz, magnitude) tuples
+        sorted by magnitude descending — peaks[0] is the strongest Larmor
+        frequency candidate — and snr is the linear peak/noise-floor power
+        ratio of the strongest peak in the averaged periodogram (NaN if no
+        peaks were found).
     """
     averaged_den = None   # accumulates sum of periodograms; divided at the end
     f_axis = None         # frequency axis (same for all runs at the same rate)
@@ -326,11 +337,30 @@ def analyse(runs_data, args, run_dir, verbose=False):
 
         # Compute periodogram on the filtered signal.  The frequency resolution
         # is sample_rate / num_samples ≈ 1 Hz for a 16000-sample, 1-second record.
+        # The Hann window suppresses spectral leakage from the record edges.
         freq_resolution = sample_rate / len(signal_data)
         vprint("  [{}] Computing periodogram (frequency resolution {:.2f} Hz "
                "≈ {:.1f} nT)...".format(i, freq_resolution,
                freq_resolution / GAMMA_HZ_PER_UT * 1000), verbose)
-        f, den = sig.periodogram(calc._signal_data, calc._sample_rate)
+        f, den = sig.periodogram(calc._signal_data, calc._sample_rate,
+                                 window='hann')
+
+        # Per-run SNR: strongest bin inside the filter passband against the
+        # median noise floor in the sidebands around it.  A run whose SNR is
+        # near 1 (0 dB) contains no detectable precession signal.
+        band_idx = np.where((f >= args.low_freq) & (f <= args.high_freq))[0]
+        if band_idx.size:
+            run_peak_idx = band_idx[np.argmax(den[band_idx])]
+            run_snr = PPMCalc.estimate_snr(f, den, f[run_peak_idx])
+            run_snr_db = (10 * np.log10(run_snr)
+                          if np.isfinite(run_snr) and run_snr > 0
+                          else float('nan'))
+            snr_msg = ("Run {} SNR: {:.1f} dB (strongest in-band bin at "
+                       "{:.1f} Hz)".format(i, run_snr_db, f[run_peak_idx]))
+            vprint("  [{}] {}".format(i, snr_msg), verbose)
+            if logger:
+                logger.info(snr_msg)
+
         if averaged_den is None:
             averaged_den = den.copy()
             f_axis = f
@@ -367,21 +397,32 @@ def analyse(runs_data, args, run_dir, verbose=False):
     # ── Peak detection ────────────────────────────────────────────────────────
     # find_peaks works on the full periodogram array, not just the plotted
     # window, to avoid missing a peak near the edge of the display range.
+    # Each detected peak is refined to sub-bin precision by parabolic
+    # interpolation before sorting.
     vprint("  Running peak detection (threshold={})...".format(
         args.fft_threshold), verbose)
     peaks_idx, _ = sig.find_peaks(averaged_den, height=args.fft_threshold)
-    peaks = sorted([(f_axis[p], averaged_den[p]) for p in peaks_idx],
-                   key=lambda x: -x[1])
+    peaks = sorted([PPMCalc.interpolate_peak(f_axis, averaged_den, p)
+                    for p in peaks_idx], key=lambda x: -x[1])
     vprint("  Found {} peak{} above threshold".format(
         len(peaks), "s" if len(peaks) != 1 else ""), verbose)
-    return peaks
+
+    # SNR of the strongest peak in the averaged spectrum — the headline
+    # quality figure for the whole measurement session.
+    snr = PPMCalc.estimate_snr(f_axis, averaged_den, peaks[0][0]) \
+        if peaks else float('nan')
+    return peaks, snr
 
 
-def report_peaks(peaks, logger):
+def report_peaks(peaks, logger, snr=None):
     """Print the strongest peak and compute the implied magnetic field strength.
 
     The Larmor relation gives:
         B [µT] = f [Hz] / γ_p     where γ_p = 42.5775 Hz/µT
+
+    The frequency is reported to 0.01 Hz and the field to 1 nT because the
+    peaks have been refined by parabolic interpolation — they are no longer
+    quantised to the ~0.67 Hz (~16 nT) periodogram bin width.
 
     Secondary candidates above the detection threshold are also listed, which
     can help distinguish genuine signal from interference peaks.  If the
@@ -391,6 +432,9 @@ def report_peaks(peaks, logger):
     Args:
         peaks:  List of (freq_hz, magnitude) tuples from analyse().
         logger: Logger instance for recording the result.
+        snr:    Optional linear peak/noise power ratio from analyse().
+                Reported in dB alongside the field value.  SNR near 0 dB
+                means the "peak" is indistinguishable from the noise floor.
     """
     if not peaks:
         msg = "No peaks found above threshold."
@@ -401,7 +445,9 @@ def report_peaks(peaks, logger):
     best_freq, best_mag = peaks[0]
     # Convert from Hz to µT using the proton gyromagnetic ratio.
     field_ut = best_freq / GAMMA_HZ_PER_UT
-    msg = "Strongest peak: {:.1f} Hz  →  B = {:.2f} µT".format(best_freq, field_ut)
+    msg = "Strongest peak: {:.2f} Hz  →  B = {:.3f} µT".format(best_freq, field_ut)
+    if snr is not None and np.isfinite(snr) and snr > 0:
+        msg += "  (SNR {:.1f} dB)".format(10 * np.log10(snr))
     print(msg)
     logger.info(msg)
 
@@ -456,8 +502,9 @@ def main():
     else:
         runs_data = collect_runs(args, run_dir, logger, verbose=args.verbose)
 
-    peaks = analyse(runs_data, args, run_dir, verbose=args.verbose)
-    report_peaks(peaks, logger)
+    peaks, snr = analyse(runs_data, args, run_dir, verbose=args.verbose,
+                         logger=logger)
+    report_peaks(peaks, logger, snr=snr)
     print("Output written to: {}".format(run_dir))
 
 

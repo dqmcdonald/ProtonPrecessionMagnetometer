@@ -165,11 +165,11 @@ class TestLoadInputFile(unittest.TestCase):
 
 class TestReportPeaks(unittest.TestCase):
 
-    def _capture_report(self, peaks):
+    def _capture_report(self, peaks, snr=None):
         import logging
         logger = logging.getLogger("test_report")
         with patch("builtins.print") as mock_print:
-            ppmrun.report_peaks(peaks, logger)
+            ppmrun.report_peaks(peaks, logger, snr=snr)
         return [str(c[0][0]) for c in mock_print.call_args_list]
 
     def test_no_peaks(self):
@@ -189,24 +189,67 @@ class TestReportPeaks(unittest.TestCase):
         lines = self._capture_report(peaks)
         self.assertTrue(any("candidate" in l.lower() for l in lines))
 
+    def test_snr_reported_in_db(self):
+        peaks = [(2849.3, 0.0019)]
+        lines = self._capture_report(peaks, snr=100.0)   # 100× power = 20 dB
+        self.assertTrue(any("SNR" in l and "20.0 dB" in l for l in lines))
+
+    def test_snr_omitted_when_not_given(self):
+        peaks = [(2849.3, 0.0019)]
+        lines = self._capture_report(peaks)
+        self.assertFalse(any("SNR" in l for l in lines))
+
+    def test_snr_omitted_when_nan(self):
+        peaks = [(2849.3, 0.0019)]
+        lines = self._capture_report(peaks, snr=float('nan'))
+        self.assertFalse(any("SNR" in l for l in lines))
+
 
 class TestAnalyse(unittest.TestCase):
 
-    def test_returns_peaks_list(self):
+    def test_returns_peaks_list_and_snr(self):
         signal = make_signal(freq_hz=2800, noise=0.001)
         runs_data = [(16000, 1500, signal)]
-        args = ppmrun.build_parser().parse_args(
-            ["--no-plots", "--fft-threshold", "0.0001"])
 
         with tempfile.TemporaryDirectory() as run_dir:
-            args_patched = ppmrun.build_parser().parse_args(
+            args = ppmrun.build_parser().parse_args(
                 ["--no-plots", "--fft-threshold", "0.0001",
                  "--low-freq", "2300", "--high-freq", "3300"])
-            peaks = ppmrun.analyse(runs_data, args_patched, run_dir)
+            peaks, snr = ppmrun.analyse(runs_data, args, run_dir)
 
         self.assertIsInstance(peaks, list)
         if peaks:
             self.assertAlmostEqual(peaks[0][0], 2800, delta=60)
+            # A clean synthetic tone should stand far above the noise floor.
+            self.assertGreater(snr, 100)
+
+    def test_snr_nan_when_no_peaks(self):
+        signal = make_signal(freq_hz=2800, noise=0.001)
+        runs_data = [(16000, 1500, signal)]
+
+        with tempfile.TemporaryDirectory() as run_dir:
+            args = ppmrun.build_parser().parse_args(
+                ["--no-plots", "--fft-threshold", "9999",
+                 "--low-freq", "2300", "--high-freq", "3300"])
+            peaks, snr = ppmrun.analyse(runs_data, args, run_dir)
+
+        self.assertEqual(peaks, [])
+        self.assertTrue(np.isnan(snr))
+
+    def test_interpolated_peak_close_to_off_bin_frequency(self):
+        # 2800.3 Hz is not a bin centre (bin width 16000/24000 = 0.667 Hz);
+        # parabolic interpolation should land much closer than half a bin.
+        signal = make_signal(freq_hz=2800.3, noise=0.001)
+        runs_data = [(16000, 1500, signal)]
+
+        with tempfile.TemporaryDirectory() as run_dir:
+            args = ppmrun.build_parser().parse_args(
+                ["--no-plots", "--fft-threshold", "0.0001",
+                 "--low-freq", "2300", "--high-freq", "3300"])
+            peaks, _ = ppmrun.analyse(runs_data, args, run_dir)
+
+        self.assertTrue(len(peaks) > 0, "Expected at least one peak")
+        self.assertAlmostEqual(peaks[0][0], 2800.3, delta=0.3)
 
     def test_fft_plot_written(self):
         signal = make_signal(freq_hz=2800)

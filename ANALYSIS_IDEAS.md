@@ -13,7 +13,10 @@ The signal itself contains far more frequency information than one bin.
 
 ## 1. Better frequency estimation (beyond the raw FFT peak)
 
-### 1.1 Parabolic interpolation of the FFT peak  *(cheapest win)*
+### 1.1 Parabolic interpolation of the FFT peak  *(cheapest win — IMPLEMENTED)*
+
+> Implemented as `PPMCalc.interpolate_peak()`; applied in both
+> `PPMCalc.doFFT()` and `ppmrun.analyse()`.
 
 Fit a parabola (or Gaussian) through the peak periodogram bin and its two
 neighbours; the vertex gives a sub-bin frequency estimate. Typically 10–50×
@@ -110,10 +113,10 @@ precession peak is not. This suppresses the harmonic comb without touching the
 signal. The existing `nosample.dat` / `newamp_no_sample.dat` files can be used
 to prototype this today.
 
-### 2.5 Windowing / matched weighting
+### 2.5 Windowing / matched weighting  *(Hann window IMPLEMENTED)*
 
 - `sig.periodogram(..., window='hann')` reduces spectral leakage from the
-  record edges.
+  record edges. *(Now used by `PPMCalc.doFFT()` and `ppmrun.analyse()`.)*
 - Better still for a decaying signal: weight the data by the expected
   `exp(−t/τ)` envelope (a *matched* window). Maximises peak SNR at the cost of
   some linewidth.
@@ -122,12 +125,15 @@ to prototype this today.
 
 ## 3. Characterising the data (quality metrics worth reporting)
 
-### 3.1 Per-run SNR
+### 3.1 Per-run SNR  *(IMPLEMENTED)*
 
 Peak power divided by the median PSD in a sideband (e.g. ±100–300 Hz away from
 the peak). Reporting this on every run makes thresholds like
 `--fft-threshold` self-calibrating, and lets the code declare "no signal"
 explicitly instead of returning the tallest noise spike.
+
+> Implemented as `PPMCalc.estimate_snr()`; `ppmrun.analyse()` logs the SNR of
+> every run and the final report includes the averaged-spectrum SNR in dB.
 
 ### 3.2 Lorentzian lineshape fit
 
@@ -226,8 +232,8 @@ methods can achieve.
 
 ## Suggested priority order
 
-1. **Parabolic peak interpolation + per-run SNR + Hann window** (§1.1, §3.1,
-   §2.5) — an afternoon's work, large precision win.
+1. ~~**Parabolic peak interpolation + per-run SNR + Hann window** (§1.1, §3.1,
+   §2.5) — an afternoon's work, large precision win.~~ **Done.**
 2. **Background acquisition pulse program + spectral subtraction** (§4.1,
    §2.4) — the best interference fix given the 2450 Hz mains harmonic.
 3. **Hilbert envelope / phase-slope analysis** (§1.2) with zero-phase SOS

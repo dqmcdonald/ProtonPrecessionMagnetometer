@@ -144,6 +144,13 @@ class TestDoFFT(unittest.TestCase):
         best_freq, _ = peaks[0]
         self.assertAlmostEqual(best_freq, target, delta=50)
 
+    def test_off_bin_peak_interpolated(self):
+        # 2800.3 Hz is between bin centres; parabolic interpolation should
+        # get within a fraction of the 0.667 Hz bin width.
+        peaks = self._run_fft(2800.3)
+        self.assertTrue(len(peaks) > 0, "Expected at least one peak")
+        self.assertAlmostEqual(peaks[0][0], 2800.3, delta=0.3)
+
     def test_peaks_sorted_by_magnitude_descending(self):
         peaks = self._run_fft(2800)
         if len(peaks) > 1:
@@ -164,6 +171,85 @@ class TestDoFFT(unittest.TestCase):
             self.assertTrue(os.path.getsize(path) > 0)
         finally:
             os.unlink(path)
+
+
+class TestInterpolatePeak(unittest.TestCase):
+
+    def test_recovers_off_bin_frequency(self):
+        # Pure tone between bin centres (bin width 16000/24000 = 0.667 Hz).
+        # The interpolated estimate should beat the raw bin centre easily.
+        import scipy.signal as sig
+        fs, n, target = 16000, 24000, 2800.3
+        t = np.arange(n) / fs
+        x = np.sin(2 * np.pi * target * t)
+        f, den = sig.periodogram(x, fs, window='hann')
+        idx = int(np.argmax(den))
+        freq, mag = PPMCalc.interpolate_peak(f, den, idx)
+        self.assertAlmostEqual(freq, target, delta=0.2)
+        self.assertGreaterEqual(mag, den[idx])
+
+    def test_symmetric_peak_stays_at_bin_centre(self):
+        f = np.array([0.0, 1.0, 2.0])
+        den = np.array([1.0, 2.0, 1.0])
+        freq, mag = PPMCalc.interpolate_peak(f, den, 1)
+        self.assertEqual(freq, 1.0)
+        self.assertEqual(mag, 2.0)
+
+    def test_edge_indices_fall_back_to_bin_values(self):
+        f = np.array([0.0, 1.0, 2.0])
+        den = np.array([3.0, 2.0, 1.0])
+        self.assertEqual(PPMCalc.interpolate_peak(f, den, 0), (0.0, 3.0))
+        self.assertEqual(PPMCalc.interpolate_peak(f, den, 2), (2.0, 1.0))
+
+    def test_degenerate_points_fall_back_to_bin_values(self):
+        # Collinear points have no parabolic maximum.
+        f = np.array([0.0, 1.0, 2.0])
+        den = np.array([1.0, 1.0, 1.0])
+        self.assertEqual(PPMCalc.interpolate_peak(f, den, 1), (1.0, 1.0))
+
+
+class TestEstimateSNR(unittest.TestCase):
+
+    def _periodogram(self, x, fs=16000):
+        import scipy.signal as sig
+        return sig.periodogram(x, fs, window='hann')
+
+    def test_strong_tone_has_high_snr(self):
+        fs, n = 16000, 24000
+        t = np.arange(n) / fs
+        rng = np.random.default_rng(1)
+        x = np.sin(2 * np.pi * 2800 * t) + rng.normal(0, 0.05, n)
+        f, den = self._periodogram(x, fs)
+        snr = PPMCalc.estimate_snr(f, den, 2800)
+        self.assertGreater(snr, 100)
+
+    def test_noise_only_has_low_snr(self):
+        rng = np.random.default_rng(2)
+        x = rng.normal(0, 1.0, 24000)
+        f, den = self._periodogram(x)
+        snr = PPMCalc.estimate_snr(f, den, 2800)
+        self.assertLess(snr, 50)
+
+    def test_nan_when_no_sideband_bins(self):
+        # All bins within `inner` Hz of the peak → no sideband to estimate from.
+        f = np.linspace(2790, 2810, 21)
+        den = np.ones_like(f)
+        snr = PPMCalc.estimate_snr(f, den, 2800)
+        self.assertTrue(np.isnan(snr))
+
+    def test_median_robust_to_interference_peak(self):
+        # A single strong interference spike in the sideband should barely
+        # move the median-based noise estimate.
+        fs, n = 16000, 24000
+        t = np.arange(n) / fs
+        rng = np.random.default_rng(3)
+        x = np.sin(2 * np.pi * 2800 * t) + rng.normal(0, 0.05, n)
+        f, den = self._periodogram(x, fs)
+        snr_clean = PPMCalc.estimate_snr(f, den, 2800)
+        spike = den.copy()
+        spike[np.argmin(np.abs(f - 2650))] = np.max(den)   # spike in sideband
+        snr_spiked = PPMCalc.estimate_snr(f, spike, 2800)
+        self.assertAlmostEqual(snr_spiked / snr_clean, 1.0, delta=0.05)
 
 
 class TestPlotSignal(unittest.TestCase):
