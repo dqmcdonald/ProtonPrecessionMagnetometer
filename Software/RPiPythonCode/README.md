@@ -78,8 +78,15 @@ python ppmrun.py --on-time 8000 --sample-time 2000
 # Narrow the bandpass filter around the expected Larmor frequency
 python ppmrun.py --low-freq 2200 --high-freq 2700
 
+# Background subtraction: collect 2 coil-off acquisitions first and subtract
+# their spectrum (suppresses mains harmonics inside the Larmor band)
+python ppmrun.py --runs 3 --background-runs 2
+
 # Re-analyse an existing data file without any hardware
 python ppmrun.py --input data/ppm1.dat --tag reanalysis
+
+# Re-analyse using an old no-sample recording as the background
+python ppmrun.py --input data/ppm1.dat --background-input data/nosample.dat
 
 # Collect data without generating plots
 python ppmrun.py --no-plots
@@ -92,6 +99,8 @@ python ppmrun.py --no-plots
 | `--input FILE` | — | Re-analyse an existing `.dat` file; no hardware required |
 | `--tag TAG` | `PPM` | Prefix for the output directory name |
 | `--runs N` | `1` | Number of measurement cycles to average |
+| `--background-runs N` | `0` | Coil-off acquisitions to collect for background spectral subtraction |
+| `--background-input FILE` | — | Existing `.dat` file to use as the background instead of collecting one |
 | `--on-time MS` | `6000` | Coil polarisation duration (ms) |
 | `--sample-time MS` | `1500` | Sampling duration after coil off (ms) |
 | `--sample-rate HZ` | `16000` | Requested ADC sample rate (Hz) |
@@ -110,6 +119,7 @@ Each run produces a directory `data/<TAG>_YYYY_MM_DD_HH_MM_SS/` containing:
 | File | Description |
 |------|-------------|
 | `run_00.dat`, `run_01.dat`, … | Raw ADC data for each measurement cycle |
+| `background_00.dat`, … | Raw ADC data for each background (coil-off) acquisition |
 | `original_00.png`, … | Three-panel plot of the raw signal (start / middle / end) |
 | `filtered_00.png`, … | Same plot after bandpass filtering |
 | `fft_averaged.png` | FFT periodogram averaged across all runs |
@@ -142,6 +152,30 @@ takes roughly `N × (ON_TIME + DELAY + SAMPLE_TIME + COOL_DOWN)` seconds
 
 ---
 
+## Background subtraction
+
+The `--background-runs N` flag collects N **background acquisitions** before
+the measurement runs.  A background acquisition (firmware command `BKGND`)
+samples the amplifier output with the polarising coil never energised, so it
+records only amplifier noise and ambient interference.  Background runs are
+fast: there is no polarise, settle, or cool-down phase.
+
+The averaged background spectrum is rescaled to match the measurement noise
+floor (the records are individually normalised, so absolute levels differ) and
+subtracted from the measurement spectrum before peak detection.  This
+suppresses **stationary** interference — anything present whether or not the
+protons were polarised.  The headline case is mains harmonics: the 49th
+harmonic of 50 Hz lands at **2450 Hz, inside the Larmor band**, where the
+bandpass filter cannot touch it.  The genuine precession peak is unaffected
+because it only exists in the polarised runs.
+
+`--background-input FILE` uses an existing `.dat` recording (such as an old
+no-sample run) as the background instead of collecting one; this also works in
+`--input` re-analysis mode with no hardware attached.  The reported SNR is
+always measured against the *unsubtracted* noise floor.
+
+---
+
 ## Data file format
 
 `.dat` files use a plain-text format:
@@ -162,7 +196,9 @@ All values are integers.  Files can be re-analysed at any time with `--input`.
 
 Command and control is ASCII.  Each command is a 5-character token with an
 optional integer parameter, terminated by `\n` (e.g. `ONTIM 6000`), and the
-Arduino replies with an acknowledgement line.
+Arduino replies with an acknowledgement line.  `EXECU` triggers a full
+polarise-wait-sample cycle; `BKGND` triggers a sample-only background
+acquisition with the coil never energised (no settle delay, no cool-down).
 
 Measurement data, however, is returned as a single little-endian **binary**
 frame.  This is roughly 3× more compact than a line-based ASCII format and
@@ -207,6 +243,9 @@ ppm.configure(on_time=6000, sample_time=1500, sample_rate=16000,
 ppm.sendConfiguredValues()
 ppm.doMeasurement(output_path="data/my_run/run_00.dat")
 
+# Sample-only background acquisition (coil never energised)
+ppm.doMeasurement(output_path="data/my_run/background_00.dat", background=True)
+
 sample_rate = ppm.getActualSampleRate()   # Hz, as measured by Arduino
 signal      = ppm.getSignalData()         # numpy array of ADC counts
 ```
@@ -242,8 +281,10 @@ Importable functions:
 | `build_parser()` | Returns the `argparse.ArgumentParser` |
 | `setup_run_dir(base_dir, tag)` | Creates and returns a timestamped run directory |
 | `load_input_file(filepath)` | Loads a `.dat` file for re-analysis |
-| `analyse(runs_data, args, run_dir)` | Filters, averages FFTs, returns peaks |
-| `report_peaks(peaks, logger)` | Prints peak frequencies and field strength |
+| `analyse(runs_data, args, run_dir, …)` | Filters, averages FFTs (optionally background-subtracted), returns `(peaks, snr)` |
+| `background_periodogram(background_data, args)` | Averaged spectrum of background acquisitions |
+| `subtract_background(f, den, bg_f, bg_den, lo, hi)` | Rescales and subtracts a background spectrum |
+| `report_peaks(peaks, logger, snr)` | Prints peak frequencies, field strength, and SNR |
 
 ---
 
@@ -253,7 +294,8 @@ Importable functions:
 python -m unittest discover -v
 ```
 
-56 tests covering signal processing, file I/O, hardware communication (serial
-port mocked, including the binary data frame), CLI argument parsing, and the
-analysis pipeline.  The test suite runs without hardware and without `pyserial`
+87 tests covering signal processing, file I/O, hardware communication (serial
+port mocked, including the binary data frame and background acquisitions),
+CLI argument parsing, background spectral subtraction, and the analysis
+pipeline.  The test suite runs without hardware and without `pyserial`
 installed.

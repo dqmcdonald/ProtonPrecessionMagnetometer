@@ -159,6 +159,43 @@ class TestMarkerDeadline(unittest.TestCase):
         self.assertAlmostEqual(sync_spy.call_args[0][0], 10.2)
 
 
+class TestBackgroundMeasurement(unittest.TestCase):
+    """doMeasurement(background=True) sends BKGND and uses the shorter
+    deadline: cool_down + sample_time + margin (no polarise or settle phase)."""
+
+    def _measure(self, background, **kwargs):
+        ppm = make_ppm(**kwargs)
+        attach_serial_frame(ppm, make_data_frame(16000, 10), ack=b"OK BKGND\n")
+        with patch.object(ppm, '_sync_to_marker',
+                          wraps=ppm._sync_to_marker) as sync_spy, \
+             patch("time.sleep"), \
+             patch("builtins.open", unittest.mock.mock_open()):
+            ppm.doMeasurement(output_path="/dev/null", background=background)
+        return ppm, sync_spy
+
+    def test_sends_bkgnd_command(self):
+        ppm, _ = self._measure(background=True)
+        sent = [c[0][0].decode() for c in ppm._ser.write.call_args_list]
+        self.assertTrue(any("BKGND" in s for s in sent))
+        self.assertFalse(any("EXECU" in s for s in sent))
+
+    def test_default_sends_execu(self):
+        ppm, _ = self._measure(background=False)
+        sent = [c[0][0].decode() for c in ppm._ser.write.call_args_list]
+        self.assertTrue(any("EXECU" in s for s in sent))
+        self.assertFalse(any("BKGND" in s for s in sent))
+
+    def test_background_deadline_excludes_polarise_and_settle(self):
+        # cool_down=10000 + sample_time=1500 + 2000 margin = 13.5 s
+        _, sync_spy = self._measure(background=True)
+        self.assertAlmostEqual(sync_spy.call_args[0][0], 13.5)
+
+    def test_background_data_decoded_normally(self):
+        ppm, _ = self._measure(background=True)
+        self.assertEqual(len(ppm.getSignalData()), 10)
+        self.assertEqual(ppm.getActualSampleRate(), 16000)
+
+
 class TestSendConfiguredValues(unittest.TestCase):
 
     def test_commands_sent(self):

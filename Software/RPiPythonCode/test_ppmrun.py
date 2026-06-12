@@ -48,6 +48,17 @@ class TestArgumentParser(unittest.TestCase):
         args = self.parse(["--runs", "5"])
         self.assertEqual(args.runs, 5)
 
+    def test_background_defaults(self):
+        args = self.parse([])
+        self.assertEqual(args.background_runs, 0)
+        self.assertIsNone(args.background_input)
+
+    def test_background_flags(self):
+        args = self.parse(["--background-runs", "3",
+                           "--background-input", "data/nosample.dat"])
+        self.assertEqual(args.background_runs, 3)
+        self.assertEqual(args.background_input, "data/nosample.dat")
+
     def test_freq_flags(self):
         args = self.parse(["--low-freq", "2500", "--high-freq", "3100"])
         self.assertEqual(args.low_freq, 2500)
@@ -165,11 +176,11 @@ class TestLoadInputFile(unittest.TestCase):
 
 class TestReportPeaks(unittest.TestCase):
 
-    def _capture_report(self, peaks):
+    def _capture_report(self, peaks, snr=None):
         import logging
         logger = logging.getLogger("test_report")
         with patch("builtins.print") as mock_print:
-            ppmrun.report_peaks(peaks, logger)
+            ppmrun.report_peaks(peaks, logger, snr=snr)
         return [str(c[0][0]) for c in mock_print.call_args_list]
 
     def test_no_peaks(self):
@@ -189,24 +200,67 @@ class TestReportPeaks(unittest.TestCase):
         lines = self._capture_report(peaks)
         self.assertTrue(any("candidate" in l.lower() for l in lines))
 
+    def test_snr_reported_in_db(self):
+        peaks = [(2849.3, 0.0019)]
+        lines = self._capture_report(peaks, snr=100.0)   # 100× power = 20 dB
+        self.assertTrue(any("SNR" in l and "20.0 dB" in l for l in lines))
+
+    def test_snr_omitted_when_not_given(self):
+        peaks = [(2849.3, 0.0019)]
+        lines = self._capture_report(peaks)
+        self.assertFalse(any("SNR" in l for l in lines))
+
+    def test_snr_omitted_when_nan(self):
+        peaks = [(2849.3, 0.0019)]
+        lines = self._capture_report(peaks, snr=float('nan'))
+        self.assertFalse(any("SNR" in l for l in lines))
+
 
 class TestAnalyse(unittest.TestCase):
 
-    def test_returns_peaks_list(self):
+    def test_returns_peaks_list_and_snr(self):
         signal = make_signal(freq_hz=2800, noise=0.001)
         runs_data = [(16000, 1500, signal)]
-        args = ppmrun.build_parser().parse_args(
-            ["--no-plots", "--fft-threshold", "0.0001"])
 
         with tempfile.TemporaryDirectory() as run_dir:
-            args_patched = ppmrun.build_parser().parse_args(
+            args = ppmrun.build_parser().parse_args(
                 ["--no-plots", "--fft-threshold", "0.0001",
                  "--low-freq", "2300", "--high-freq", "3300"])
-            peaks = ppmrun.analyse(runs_data, args_patched, run_dir)
+            peaks, snr = ppmrun.analyse(runs_data, args, run_dir)
 
         self.assertIsInstance(peaks, list)
         if peaks:
             self.assertAlmostEqual(peaks[0][0], 2800, delta=60)
+            # A clean synthetic tone should stand far above the noise floor.
+            self.assertGreater(snr, 100)
+
+    def test_snr_nan_when_no_peaks(self):
+        signal = make_signal(freq_hz=2800, noise=0.001)
+        runs_data = [(16000, 1500, signal)]
+
+        with tempfile.TemporaryDirectory() as run_dir:
+            args = ppmrun.build_parser().parse_args(
+                ["--no-plots", "--fft-threshold", "9999",
+                 "--low-freq", "2300", "--high-freq", "3300"])
+            peaks, snr = ppmrun.analyse(runs_data, args, run_dir)
+
+        self.assertEqual(peaks, [])
+        self.assertTrue(np.isnan(snr))
+
+    def test_interpolated_peak_close_to_off_bin_frequency(self):
+        # 2800.3 Hz is not a bin centre (bin width 16000/24000 = 0.667 Hz);
+        # parabolic interpolation should land much closer than half a bin.
+        signal = make_signal(freq_hz=2800.3, noise=0.001)
+        runs_data = [(16000, 1500, signal)]
+
+        with tempfile.TemporaryDirectory() as run_dir:
+            args = ppmrun.build_parser().parse_args(
+                ["--no-plots", "--fft-threshold", "0.0001",
+                 "--low-freq", "2300", "--high-freq", "3300"])
+            peaks, _ = ppmrun.analyse(runs_data, args, run_dir)
+
+        self.assertTrue(len(peaks) > 0, "Expected at least one peak")
+        self.assertAlmostEqual(peaks[0][0], 2800.3, delta=0.3)
 
     def test_fft_plot_written(self):
         signal = make_signal(freq_hz=2800)
@@ -218,6 +272,79 @@ class TestAnalyse(unittest.TestCase):
         with tempfile.TemporaryDirectory() as run_dir:
             ppmrun.analyse(runs_data, args, run_dir)
             self.assertTrue(os.path.exists(os.path.join(run_dir, "fft_averaged.png")))
+
+
+class TestBackgroundSubtraction(unittest.TestCase):
+    """Background spectral subtraction removes stationary interference that
+    appears in both the measurement and the coil-off background record."""
+
+    FS = 16000
+    N = 24000
+
+    def _make_records(self):
+        """Signal run: interference tone + weaker decaying precession tone.
+        Background run: the same interference, different noise realisation."""
+        t = np.arange(self.N) / self.FS
+        interference = 1.0 * np.sin(2 * np.pi * 2950 * t)
+        precession = 0.5 * np.sin(2 * np.pi * 2800 * t) * np.exp(-t / 0.5)
+        rng_sig = np.random.default_rng(10)
+        rng_bg = np.random.default_rng(11)
+        sig_run = ((interference + precession
+                    + rng_sig.normal(0, 0.05, self.N)) * 1000 + 2048).astype(int)
+        bg_run = ((interference
+                   + rng_bg.normal(0, 0.05, self.N)) * 1000 + 2048).astype(int)
+        return sig_run, bg_run
+
+    def _args(self):
+        return ppmrun.build_parser().parse_args(
+            ["--no-plots", "--fft-threshold", "1e-7",
+             "--low-freq", "2300", "--high-freq", "3300"])
+
+    def test_interference_dominates_without_subtraction(self):
+        sig_run, _ = self._make_records()
+        with tempfile.TemporaryDirectory() as run_dir:
+            peaks, _ = ppmrun.analyse([(self.FS, 1500, sig_run)],
+                                      self._args(), run_dir)
+        self.assertTrue(len(peaks) > 0)
+        self.assertAlmostEqual(peaks[0][0], 2950, delta=2)
+
+    def test_subtraction_recovers_precession_peak(self):
+        sig_run, bg_run = self._make_records()
+        with tempfile.TemporaryDirectory() as run_dir:
+            peaks, snr = ppmrun.analyse(
+                [(self.FS, 1500, sig_run)], self._args(), run_dir,
+                background_data=[(self.FS, 1500, bg_run)])
+        self.assertTrue(len(peaks) > 0)
+        self.assertAlmostEqual(peaks[0][0], 2800, delta=2)
+
+    def test_background_periodogram_empty_returns_none(self):
+        f, den = ppmrun.background_periodogram([], self._args())
+        self.assertIsNone(f)
+        self.assertIsNone(den)
+
+    def test_subtract_background_interpolates_mismatched_axis(self):
+        # Background recorded at a slightly different actual sample rate has
+        # a different frequency axis; subtraction must interpolate, not fail.
+        f_axis = np.linspace(0, 8000, 1001)
+        den = np.ones_like(f_axis)
+        bg_f = np.linspace(0, 8000, 901)
+        bg_den = np.ones_like(bg_f) * 0.5
+        result, scale = ppmrun.subtract_background(
+            f_axis, den, bg_f, bg_den, 2300, 3300)
+        self.assertEqual(len(result), len(f_axis))
+        self.assertAlmostEqual(scale, 2.0)
+        # Noise floor matched: 1.0 - 2.0 * 0.5 = 0
+        band = (f_axis >= 2300) & (f_axis <= 3300)
+        np.testing.assert_allclose(result[band], 0.0, atol=1e-12)
+
+    def test_subtracted_spectrum_never_negative(self):
+        sig_run, bg_run = self._make_records()
+        f, den = ppmrun.background_periodogram(
+            [(self.FS, 1500, bg_run)], self._args())
+        # Subtract a deliberately oversized background from a weak spectrum.
+        result, _ = ppmrun.subtract_background(
+            f, np.full_like(den, np.median(den)), f, den * 100, 2300, 3300)
+        self.assertGreaterEqual(result.min(), 0.0)
 
 
 if __name__ == "__main__":

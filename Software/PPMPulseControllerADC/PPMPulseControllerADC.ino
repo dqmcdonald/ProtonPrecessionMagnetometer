@@ -26,6 +26,14 @@
  *                overflow.  An EXECU received during cool-down is queued and
  *                executed automatically when cool-down completes.
  *
+ * Background acquisition (BKGND command):
+ *   Runs SAMPLE + TRANSMIT only — the coil is never energised, so the record
+ *   contains just amplifier noise and ambient interference (mains harmonics,
+ *   etc.).  The Pi subtracts its spectrum from a normal measurement's spectrum
+ *   to suppress interference that falls inside the Larmor band.  No settle
+ *   delay (there is no coil transient) and no cool-down (the MOSFET never
+ *   conducted).  A BKGND received during cool-down is queued like EXECU.
+ *
  * Pin assignments:
  *   D0  Serial TX (to Pi)            D1  Serial RX (from Pi)
  *   D2  Push button (LOW = pressed)  D3  RTC 32.768 kHz interrupt
@@ -118,6 +126,10 @@ unsigned long    state_start_ms    = 0;
 // automatically as soon as cool-down completes.
 bool measurement_requested = false;
 
+// Set true (together with measurement_requested) when BKGND arrives during
+// cool-down, so the queued run is executed as a background acquisition.
+bool background_requested = false;
+
 // ── Globals ───────────────────────────────────────────────────────────────────
 
 // Incremented by timer_isr() on each 32.768 kHz rising edge.
@@ -151,6 +163,7 @@ struct SampleData {
 
 void          processCommand();
 void          startMeasurement();
+void          runBackgroundMeasurement();
 SampleData    recordSignal();
 void          sendData(unsigned long num_samples, unsigned long actual_sample_rate);
 void          writeUint32LE(uint32_t value);
@@ -274,10 +287,16 @@ void loop() {
             if (millis() - state_start_ms >= (unsigned long)cool_down_period) {
                 setRGBLEDColor(50, 200, 50);   // green = ready
                 measurement_state = STATE_IDLE;
-                // If the Pi sent EXECU while we were cooling, start immediately.
+                // If the Pi sent EXECU/BKGND while we were cooling, start
+                // the queued run immediately.
                 if (measurement_requested) {
                     measurement_requested = false;
-                    startMeasurement();
+                    if (background_requested) {
+                        background_requested = false;
+                        runBackgroundMeasurement();
+                    } else {
+                        startMeasurement();
+                    }
                 }
             }
             break;
@@ -295,6 +314,28 @@ void startMeasurement() {
     digitalWrite(COIL_PIN, LOW);   // energise coil
     state_start_ms    = millis();
     measurement_state = STATE_POLARISING;
+}
+
+// ── runBackgroundMeasurement() ───────────────────────────────────────────────
+
+void runBackgroundMeasurement() {
+    // Sample-only acquisition: the coil is never energised, so the record
+    // contains amplifier noise and ambient interference only.  Used by the Pi
+    // for background spectral subtraction.
+    //
+    // Skips the polarise and settle phases (no coil current, no transient)
+    // and the cool-down phase (the MOSFET never conducted), so the device
+    // returns to IDLE as soon as the data has been sent.  Blocks the main
+    // loop for the duration of sampling + transmit, exactly as the normal
+    // measurement path does.
+    if (measurement_state != STATE_IDLE) {
+        Serial.println(F("ERR: busy"));
+        return;
+    }
+    setRGBLEDColor(200, 200, 50);  // yellow = sampling
+    SampleData sd = recordSignal();
+    sendData(sd.num_samples, sd.actual_sample_rate);
+    setRGBLEDColor(50, 200, 50);   // green = ready
 }
 
 // ── processCommand() ─────────────────────────────────────────────────────────
@@ -319,6 +360,19 @@ void processCommand() {
             // Queue the request; it will fire when cool-down ends.
             Serial.println(F("OK EXECU"));
             measurement_requested = true;
+        } else {
+            Serial.println(F("ERR: busy"));
+        }
+
+    } else if (strncmp(serial_buff, "BKGND", 5) == 0) {
+        if (measurement_state == STATE_IDLE) {
+            Serial.println(F("OK BKGND"));
+            runBackgroundMeasurement();
+        } else if (measurement_state == STATE_COOLING) {
+            // Queue the request; it will fire when cool-down ends.
+            Serial.println(F("OK BKGND"));
+            measurement_requested = true;
+            background_requested  = true;
         } else {
             Serial.println(F("ERR: busy"));
         }

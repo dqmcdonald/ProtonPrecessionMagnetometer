@@ -15,9 +15,26 @@ Tagged run with 5-cycle averaging and narrow filter::
 
     python ppmrun.py --tag hillside --runs 5 --low-freq 2200 --high-freq 2700
 
+Run with background subtraction (2 coil-off acquisitions collected first)::
+
+    python ppmrun.py --runs 3 --background-runs 2
+
 Re-analyse an existing data file (no hardware needed)::
 
     python ppmrun.py --input data/ppm1.dat
+
+Re-analyse with an existing no-sample recording as background::
+
+    python ppmrun.py --input data/ppm1.dat --background-input data/nosample.dat
+
+Background subtraction
+----------------------
+Background acquisitions sample with the coil never energised, recording only
+amplifier noise and ambient interference.  Their averaged spectrum is rescaled
+to the measurement noise floor and subtracted from the measurement spectrum
+before peak detection, suppressing stationary interference — notably mains
+harmonics: the 49th harmonic of 50 Hz (2450 Hz) falls inside the Larmor band
+and cannot be removed by the bandpass filter.
 
 Multi-run averaging
 -------------------
@@ -85,6 +102,22 @@ def build_parser():
                    help="Number of complete measurement cycles to perform and "
                         "average.  SNR improves by √N but total time scales "
                         "linearly with N (default: 1)")
+
+    p.add_argument("--background-runs", type=int, default=0, metavar="N",
+                   help="Number of background (coil-off) acquisitions to "
+                        "collect before the measurement runs.  Their averaged "
+                        "spectrum is subtracted from the measurement spectrum "
+                        "to suppress stationary interference such as mains "
+                        "harmonics — the 49th harmonic of 50 Hz (2450 Hz) "
+                        "falls inside the Larmor band.  Background runs are "
+                        "fast: no polarise, settle, or cool-down phase "
+                        "(default: 0, no subtraction)")
+
+    p.add_argument("--background-input", metavar="FILE",
+                   help="Use an existing .dat file (e.g. a previous no-sample "
+                        "recording) as the background for spectral subtraction "
+                        "instead of collecting one.  Works with both hardware "
+                        "runs and --input re-analysis.")
 
     # ── Hardware timing ───────────────────────────────────────────────────────
     p.add_argument("--on-time", type=int, default=6000, metavar="MS",
@@ -185,15 +218,70 @@ def vprint(msg, verbose):
         print(msg)
 
 
+def _collect_cycles(ppm, n, run_dir, logger, verbose, background=False):
+    """Perform n measurement cycles on an open PPMRun and return the results.
+
+    Each run is saved to its own numbered .dat file ("run_XX.dat", or
+    "background_XX.dat" for background acquisitions) so individual cycles can
+    be inspected separately if needed.
+
+    Args:
+        ppm:        An open, configured PPM.PPMRun instance.
+        n:          Number of cycles to perform.
+        run_dir:    Directory where data files will be saved.
+        logger:     Logger instance for progress messages.
+        verbose:    If True, print progress to stdout.
+        background: If True, perform sample-only background acquisitions
+                    (coil never energised).
+
+    Returns:
+        List of (sample_rate, sample_time_ms, signal_data) tuples, one per run.
+    """
+    kind = "Background" if background else "Run"
+    file_prefix = "background" if background else "run"
+
+    results = []
+    for i in range(n):
+        logger.info("Starting {} {}/{}".format(kind.lower(), i + 1, n))
+        vprint("\n[{} {}/{}] Sending configuration to Arduino...".format(
+            kind, i + 1, n), verbose)
+        # Re-send configured values before each run in case the Arduino was
+        # reset or powered off between runs.
+        ppm.sendConfiguredValues()
+        if background:
+            vprint("[{} {}/{}] Sampling with coil off (noise + interference "
+                   "only)...".format(kind, i + 1, n), verbose)
+        else:
+            vprint("[{} {}/{}] Polarising coil for {} ms...".format(
+                kind, i + 1, n, ppm._on_time), verbose)
+        out_path = os.path.join(run_dir, "{}_{:02d}.dat".format(file_prefix, i))
+        ppm.doMeasurement(output_path=out_path, background=background)
+        actual_rate = ppm.getActualSampleRate()
+        n_samples = len(ppm.getSignalData())
+        vprint("[{} {}/{}] Sampling complete: {} samples at {} Hz  →  {:.2f} s window".format(
+            kind, i + 1, n, n_samples, actual_rate,
+            n_samples / actual_rate), verbose)
+        vprint("[{} {}/{}] Data saved to {}".format(kind, i + 1, n, out_path), verbose)
+        results.append((
+            actual_rate,
+            ppm.getSampleTime(),
+            ppm.getSignalData().copy()))   # copy so the array is not aliased
+        logger.info("{} {}/{} complete, saved to {}".format(kind, i + 1, n, out_path))
+
+    return results
+
+
 def collect_runs(args, run_dir, logger, verbose=False):
-    """Perform N hardware measurement cycles and return the results.
+    """Perform the configured hardware measurement cycles and return the results.
 
     PPM is imported here rather than at module level so that the module can be
     imported (for testing, re-analysis, etc.) on machines where pyserial is not
     installed or the serial port does not exist.
 
-    Each run is saved to its own numbered .dat file so that individual cycles
-    can be inspected separately if needed.
+    Background acquisitions (if requested) are collected first: they need no
+    polarise, settle, or cool-down phase, so they are fast, and running them
+    before the first polarise pulse guarantees no residual proton signal can
+    leak into the background record.
 
     Args:
         args:    Parsed argparse namespace with hardware timing attributes.
@@ -202,11 +290,12 @@ def collect_runs(args, run_dir, logger, verbose=False):
         verbose: If True, print progress to stdout.
 
     Returns:
-        List of (sample_rate, sample_time_ms, signal_data) tuples, one per run.
+        (signal_runs, background_runs) — two lists of
+        (sample_rate, sample_time_ms, signal_data) tuples.  background_runs is
+        empty unless --background-runs was given.
     """
     import PPM   # deferred import — requires pyserial and a live serial port
 
-    results = []
     # --port omitted: locate the Arduino automatically (USB vendor ID match,
     # then device-name heuristic, then the Pi hardware UART).
     port = args.port
@@ -226,30 +315,13 @@ def collect_runs(args, run_dir, logger, verbose=False):
                args.on_time, args.sample_time, args.sample_rate,
                args.delay, args.cool_down), verbose)
 
-    for i in range(args.runs):
-        logger.info("Starting run {}/{}".format(i + 1, args.runs))
-        vprint("\n[Run {}/{}] Sending configuration to Arduino...".format(
-            i + 1, args.runs), verbose)
-        # Re-send configured values before each run in case the Arduino was
-        # reset or powered off between runs.
-        ppm.sendConfiguredValues()
-        vprint("[Run {}/{}] Polarising coil for {} ms...".format(
-            i + 1, args.runs, args.on_time), verbose)
-        out_path = os.path.join(run_dir, "run_{:02d}.dat".format(i))
-        ppm.doMeasurement(output_path=out_path)
-        actual_rate = ppm.getActualSampleRate()
-        n_samples = len(ppm.getSignalData())
-        vprint("[Run {}/{}] Sampling complete: {} samples at {} Hz  →  {:.2f} s window".format(
-            i + 1, args.runs, n_samples, actual_rate,
-            n_samples / actual_rate), verbose)
-        vprint("[Run {}/{}] Data saved to {}".format(i + 1, args.runs, out_path), verbose)
-        results.append((
-            actual_rate,
-            ppm.getSampleTime(),
-            ppm.getSignalData().copy()))   # copy so the array is not aliased
-        logger.info("Run {}/{} complete, saved to {}".format(i + 1, args.runs, out_path))
+    background_runs = []
+    if args.background_runs > 0:
+        background_runs = _collect_cycles(
+            ppm, args.background_runs, run_dir, logger, verbose, background=True)
 
-    return results
+    signal_runs = _collect_cycles(ppm, args.runs, run_dir, logger, verbose)
+    return signal_runs, background_runs
 
 
 def load_input_file(filepath):
@@ -272,7 +344,86 @@ def load_input_file(filepath):
     return [(sample_rate, sample_time_ms, signal_data)]
 
 
-def analyse(runs_data, args, run_dir, verbose=False):
+def background_periodogram(background_data, args, verbose=False):
+    """Average the Hann periodograms of one or more background acquisitions.
+
+    Each background record is pushed through the same pipeline as a
+    measurement record (PPMCalc normalisation, Butterworth bandpass, Hann
+    periodogram) so that its spectrum is directly comparable with the
+    measurement spectrum it will be subtracted from.
+
+    Args:
+        background_data: List of (sample_rate, sample_time_ms, signal_data)
+                         tuples from background (coil-off) acquisitions.
+        args:            Parsed argparse namespace with analysis parameters.
+        verbose:         If True, print progress to stdout.
+
+    Returns:
+        (f_axis, averaged_den) for the averaged background spectrum, or
+        (None, None) if background_data is empty.
+    """
+    if not background_data:
+        return None, None
+
+    averaged_den = None
+    f_axis = None
+    for i, (sample_rate, sample_time, signal_data) in enumerate(background_data):
+        vprint("  [bg {}] Processing background record ({} samples at {} Hz)..."
+               .format(i, len(signal_data), sample_rate), verbose)
+        calc = PPMCalc.PPMCalc(sample_rate, sample_time, signal_data)
+        calc.filterSignal(args.low_freq, args.high_freq)
+        f, den = sig.periodogram(calc._signal_data, calc._sample_rate,
+                                 window='hann')
+        if averaged_den is None:
+            averaged_den = den.copy()
+            f_axis = f
+        else:
+            averaged_den += den
+    averaged_den /= len(background_data)
+    return f_axis, averaged_den
+
+
+def subtract_background(f_axis, den, bg_f, bg_den, low_freq, high_freq):
+    """Subtract a background spectrum from a measurement spectrum.
+
+    PPMCalc normalises each record by its own amplitude range, so the absolute
+    PSD levels of the measurement and background spectra differ even though
+    they were recorded with identical hardware settings.  The background is
+    therefore rescaled before subtraction: the scale factor is the median of
+    the per-bin measurement/background ratio over the analysis band.  The
+    median is dominated by ordinary noise bins — discrete peaks (the Larmor
+    line, interference spikes) occupy too few bins to move it — so it matches
+    the two noise floors without cancelling the signal peak.
+
+    The result is clipped at zero: negative power is unphysical and would
+    confuse peak detection.
+
+    Args:
+        f_axis:    Measurement frequency axis.
+        den:       Measurement power spectral density.
+        bg_f:      Background frequency axis (interpolated onto f_axis if it
+                   differs, e.g. when the records have different lengths or
+                   actual sample rates).
+        bg_den:    Background power spectral density.
+        low_freq:  Lower edge of the analysis band in Hz.
+        high_freq: Upper edge of the analysis band in Hz.
+
+    Returns:
+        (subtracted_den, scale) — the background-subtracted PSD and the scale
+        factor that was applied to the background.  Returns (den, None)
+        unchanged if no usable bins were found to estimate the scale.
+    """
+    if len(bg_den) != len(f_axis) or not np.array_equal(bg_f, f_axis):
+        bg_den = np.interp(f_axis, bg_f, bg_den)
+    band = (f_axis >= low_freq) & (f_axis <= high_freq) & (bg_den > 0)
+    if not band.any():
+        return den, None
+    scale = float(np.median(den[band] / bg_den[band]))
+    return np.clip(den - scale * bg_den, 0.0, None), scale
+
+
+def analyse(runs_data, args, run_dir, verbose=False, logger=None,
+            background_data=None):
     """Filter signals, average periodograms across all runs, and find peaks.
 
     For each run:
@@ -280,7 +431,10 @@ def analyse(runs_data, args, run_dir, verbose=False):
     2. Optionally save a three-panel raw signal plot.
     3. Apply a Butterworth bandpass filter to reject out-of-band interference.
     4. Optionally save a three-panel filtered signal plot.
-    5. Compute the periodogram (power spectral density estimate).
+    5. Compute the periodogram (power spectral density estimate) with a Hann
+       window to reduce spectral leakage, and report the run's SNR — the
+       strongest in-band peak against the median noise floor ±100–300 Hz
+       either side of it.
 
     After processing all runs, the periodograms are averaged element-wise.
     Averaging in the frequency domain is preferred over averaging the raw
@@ -288,16 +442,35 @@ def analyse(runs_data, args, run_dir, verbose=False):
     to be phase-aligned between runs — a condition that cannot be guaranteed
     since the proton phase is random at the start of each precession cycle.
 
-    The averaged periodogram is then searched for peaks above the threshold.
+    The averaged periodogram is then searched for peaks above the threshold,
+    and each peak is refined to sub-bin precision by parabolic interpolation
+    (PPMCalc.interpolate_peak) — the raw bin width of ~0.67 Hz corresponds to
+    ~16 nT, so interpolation matters for the reported field value.
+
+    If background_data is given, the averaged spectrum of those coil-off
+    acquisitions is rescaled to the measurement noise floor and subtracted
+    before peak detection (see subtract_background), suppressing stationary
+    interference such as mains harmonics inside the Larmor band.  SNR is
+    always estimated against the *unsubtracted* spectrum: subtraction pushes
+    noise bins towards zero, which would make a peak/noise ratio measured on
+    the subtracted spectrum meaninglessly large.
 
     Args:
-        runs_data: List of (sample_rate, sample_time_ms, signal_data) tuples.
-        args:      Parsed argparse namespace with analysis parameters.
-        run_dir:   Directory where output files are written.
+        runs_data:       List of (sample_rate, sample_time_ms, signal_data)
+                         tuples.
+        args:            Parsed argparse namespace with analysis parameters.
+        run_dir:         Directory where output files are written.
+        verbose:         If True, print pipeline progress to stdout.
+        logger:          Optional logging.Logger for per-run SNR records.
+        background_data: Optional list of run tuples from background
+                         (coil-off) acquisitions for spectral subtraction.
 
     Returns:
-        List of (freq_hz, magnitude) tuples sorted by magnitude descending.
-        peaks[0] is the strongest Larmor frequency candidate.
+        (peaks, snr) where peaks is a list of (freq_hz, magnitude) tuples
+        sorted by magnitude descending — peaks[0] is the strongest Larmor
+        frequency candidate — and snr is the linear peak/noise-floor power
+        ratio of the strongest peak in the averaged periodogram (NaN if no
+        peaks were found).
     """
     averaged_den = None   # accumulates sum of periodograms; divided at the end
     f_axis = None         # frequency axis (same for all runs at the same rate)
@@ -326,11 +499,30 @@ def analyse(runs_data, args, run_dir, verbose=False):
 
         # Compute periodogram on the filtered signal.  The frequency resolution
         # is sample_rate / num_samples ≈ 1 Hz for a 16000-sample, 1-second record.
+        # The Hann window suppresses spectral leakage from the record edges.
         freq_resolution = sample_rate / len(signal_data)
         vprint("  [{}] Computing periodogram (frequency resolution {:.2f} Hz "
                "≈ {:.1f} nT)...".format(i, freq_resolution,
                freq_resolution / GAMMA_HZ_PER_UT * 1000), verbose)
-        f, den = sig.periodogram(calc._signal_data, calc._sample_rate)
+        f, den = sig.periodogram(calc._signal_data, calc._sample_rate,
+                                 window='hann')
+
+        # Per-run SNR: strongest bin inside the filter passband against the
+        # median noise floor in the sidebands around it.  A run whose SNR is
+        # near 1 (0 dB) contains no detectable precession signal.
+        band_idx = np.where((f >= args.low_freq) & (f <= args.high_freq))[0]
+        if band_idx.size:
+            run_peak_idx = band_idx[np.argmax(den[band_idx])]
+            run_snr = PPMCalc.estimate_snr(f, den, f[run_peak_idx])
+            run_snr_db = (10 * np.log10(run_snr)
+                          if np.isfinite(run_snr) and run_snr > 0
+                          else float('nan'))
+            snr_msg = ("Run {} SNR: {:.1f} dB (strongest in-band bin at "
+                       "{:.1f} Hz)".format(i, run_snr_db, f[run_peak_idx]))
+            vprint("  [{}] {}".format(i, snr_msg), verbose)
+            if logger:
+                logger.info(snr_msg)
+
         if averaged_den is None:
             averaged_den = den.copy()
             f_axis = f
@@ -342,6 +534,25 @@ def analyse(runs_data, args, run_dir, verbose=False):
     if n_runs > 1:
         vprint("  Averaged {} periodograms (SNR improvement ≈ {:.1f}×)".format(
             n_runs, n_runs ** 0.5), verbose)
+
+    # ── Background subtraction ────────────────────────────────────────────────
+    # Keep the unsubtracted spectrum: SNR is always measured against the raw
+    # noise floor (see docstring).
+    raw_den = averaged_den
+    background_subtracted = False
+    if background_data:
+        bg_f, bg_den = background_periodogram(background_data, args, verbose)
+        averaged_den, scale = subtract_background(
+            f_axis, averaged_den, bg_f, bg_den, args.low_freq, args.high_freq)
+        if scale is not None:
+            background_subtracted = True
+            msg = ("Background subtraction applied: {} record{}, "
+                   "noise-floor scale factor {:.3f}".format(
+                       len(background_data),
+                       "s" if len(background_data) != 1 else "", scale))
+            vprint("  " + msg, verbose)
+            if logger:
+                logger.info(msg)
 
     # ── Plot the averaged FFT ─────────────────────────────────────────────────
     import matplotlib
@@ -359,29 +570,44 @@ def analyse(runs_data, args, run_dir, verbose=False):
     ax.set_ylim([0, y_max])
     ax.set_xlim([args.low_freq, args.high_freq])
     ax.set_xlabel("Frequency (Hz)")
-    ax.set_ylabel("Power spectral density (averaged over {} run{})".format(
-        n_runs, "s" if n_runs > 1 else ""))
+    ylabel = "Power spectral density (averaged over {} run{}{})".format(
+        n_runs, "s" if n_runs > 1 else "",
+        ", background-subtracted" if background_subtracted else "")
+    ax.set_ylabel(ylabel)
     fig.savefig(fft_path)
     plt.close(fig)
 
     # ── Peak detection ────────────────────────────────────────────────────────
     # find_peaks works on the full periodogram array, not just the plotted
     # window, to avoid missing a peak near the edge of the display range.
+    # Each detected peak is refined to sub-bin precision by parabolic
+    # interpolation before sorting.
     vprint("  Running peak detection (threshold={})...".format(
         args.fft_threshold), verbose)
     peaks_idx, _ = sig.find_peaks(averaged_den, height=args.fft_threshold)
-    peaks = sorted([(f_axis[p], averaged_den[p]) for p in peaks_idx],
-                   key=lambda x: -x[1])
+    peaks = sorted([PPMCalc.interpolate_peak(f_axis, averaged_den, p)
+                    for p in peaks_idx], key=lambda x: -x[1])
     vprint("  Found {} peak{} above threshold".format(
         len(peaks), "s" if len(peaks) != 1 else ""), verbose)
-    return peaks
+
+    # SNR of the strongest peak — the headline quality figure for the whole
+    # measurement session.  Measured against the unsubtracted spectrum so the
+    # noise floor is the real one, even when background subtraction located
+    # the peak.
+    snr = PPMCalc.estimate_snr(f_axis, raw_den, peaks[0][0]) \
+        if peaks else float('nan')
+    return peaks, snr
 
 
-def report_peaks(peaks, logger):
+def report_peaks(peaks, logger, snr=None):
     """Print the strongest peak and compute the implied magnetic field strength.
 
     The Larmor relation gives:
         B [µT] = f [Hz] / γ_p     where γ_p = 42.5775 Hz/µT
+
+    The frequency is reported to 0.01 Hz and the field to 1 nT because the
+    peaks have been refined by parabolic interpolation — they are no longer
+    quantised to the ~0.67 Hz (~16 nT) periodogram bin width.
 
     Secondary candidates above the detection threshold are also listed, which
     can help distinguish genuine signal from interference peaks.  If the
@@ -391,6 +617,9 @@ def report_peaks(peaks, logger):
     Args:
         peaks:  List of (freq_hz, magnitude) tuples from analyse().
         logger: Logger instance for recording the result.
+        snr:    Optional linear peak/noise power ratio from analyse().
+                Reported in dB alongside the field value.  SNR near 0 dB
+                means the "peak" is indistinguishable from the noise floor.
     """
     if not peaks:
         msg = "No peaks found above threshold."
@@ -401,7 +630,9 @@ def report_peaks(peaks, logger):
     best_freq, best_mag = peaks[0]
     # Convert from Hz to µT using the proton gyromagnetic ratio.
     field_ut = best_freq / GAMMA_HZ_PER_UT
-    msg = "Strongest peak: {:.1f} Hz  →  B = {:.2f} µT".format(best_freq, field_ut)
+    msg = "Strongest peak: {:.2f} Hz  →  B = {:.3f} µT".format(best_freq, field_ut)
+    if snr is not None and np.isfinite(snr) and snr > 0:
+        msg += "  (SNR {:.1f} dB)".format(10 * np.log10(snr))
     print(msg)
     logger.info(msg)
 
@@ -441,6 +672,13 @@ def main():
         print("Warning: --runs is ignored when --input is specified.",
               file=sys.stderr)
 
+    # Hardware background collection makes no sense in re-analysis mode, and
+    # is redundant when a background file has been supplied explicitly.
+    if args.background_runs > 0 and (args.input or args.background_input):
+        print("Warning: --background-runs is ignored when --input or "
+              "--background-input is specified.", file=sys.stderr)
+        args.background_runs = 0
+
     run_dir = setup_run_dir(args.output_dir, args.tag)
     logger = setup_logger(run_dir)
 
@@ -453,11 +691,20 @@ def main():
         logger.info("Reanalysis mode: loading {}".format(args.input))
         vprint("Reanalysis mode: loading {}".format(args.input), args.verbose)
         runs_data = load_input_file(args.input)
+        background_data = []
     else:
-        runs_data = collect_runs(args, run_dir, logger, verbose=args.verbose)
+        runs_data, background_data = collect_runs(
+            args, run_dir, logger, verbose=args.verbose)
 
-    peaks = analyse(runs_data, args, run_dir, verbose=args.verbose)
-    report_peaks(peaks, logger)
+    if args.background_input:
+        logger.info("Loading background from {}".format(args.background_input))
+        vprint("Loading background from {}".format(args.background_input),
+               args.verbose)
+        background_data = load_input_file(args.background_input)
+
+    peaks, snr = analyse(runs_data, args, run_dir, verbose=args.verbose,
+                         logger=logger, background_data=background_data)
+    report_peaks(peaks, logger, snr=snr)
     print("Output written to: {}".format(run_dir))
 
 

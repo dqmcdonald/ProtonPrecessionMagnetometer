@@ -12,6 +12,8 @@ relaxation), typically 1-3 s for tap water.
 
 This module provides:
 - load_from_file()     — parse a .dat file saved by PPM.doMeasurement()
+- interpolate_peak()   — sub-bin peak frequency by parabolic interpolation
+- estimate_snr()       — spectral peak SNR against the nearby noise floor
 - PPMCalc class        — normalisation, filtering, plotting, and FFT analysis
 
 All plotting uses the non-interactive Agg backend so the code runs headlessly
@@ -69,6 +71,78 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     b, a = butter_bandpass(lowcut, highcut, fs, order=order)
     y = lfilter(b, a, data)
     return y
+
+
+# ── Spectral helpers ──────────────────────────────────────────────────────────
+
+def interpolate_peak(f, den, idx):
+    """Refine a periodogram peak position by parabolic interpolation.
+
+    The discrete periodogram quantises frequency to bins of width fs / N —
+    about 0.67 Hz (≈ 16 nT) for a 1.5 s record at 16 kHz.  Fitting a parabola
+    through the peak bin and its two neighbours and taking the vertex recovers
+    the underlying peak position to a small fraction of a bin, typically a
+    10-50× improvement in frequency precision at no extra measurement cost.
+
+    Args:
+        f:   Frequency axis from scipy.signal.periodogram.
+        den: Power spectral density array (same length as f).
+        idx: Index of a local maximum in den (e.g. from find_peaks).
+
+    Returns:
+        (freq_hz, magnitude) of the interpolated peak.  Falls back to the raw
+        bin values when idx is at either end of the array or the three points
+        do not form a maximum (degenerate / collinear).
+    """
+    if idx <= 0 or idx >= len(den) - 1:
+        return f[idx], den[idx]
+    y1, y2, y3 = den[idx - 1], den[idx], den[idx + 1]
+    curvature = y1 - 2.0 * y2 + y3
+    if curvature >= 0:
+        # Not a parabolic maximum — flat top or degenerate points.
+        return f[idx], den[idx]
+    delta = 0.5 * (y1 - y3) / curvature
+    # For a true local maximum the vertex lies within half a bin of idx;
+    # clamp anyway to guard against pathological side-lobe shapes.
+    delta = float(np.clip(delta, -0.5, 0.5))
+    freq = f[idx] + delta * (f[1] - f[0])
+    mag = y2 - 0.25 * (y1 - y3) * delta
+    return freq, mag
+
+
+def estimate_snr(f, den, peak_freq, inner=100.0, outer=300.0):
+    """Estimate the SNR of a spectral peak against the nearby noise floor.
+
+    The noise floor is taken as the median PSD in the two sidebands between
+    `inner` and `outer` Hz either side of the peak.  The median (rather than
+    the mean) is robust to other discrete peaks — e.g. mains harmonics —
+    falling inside the sidebands.
+
+    The default sideband (±100–300 Hz) is chosen to sit inside the default
+    bandpass filter window when the peak is near the centre of the band, so
+    the noise estimate is not biased low by the filter's stopband attenuation.
+
+    Args:
+        f:         Frequency axis from scipy.signal.periodogram.
+        den:       Power spectral density array (same length as f).
+        peak_freq: Peak frequency in Hz (bin-centre or interpolated).
+        inner:     Inner edge of the noise sidebands, Hz from the peak.
+        outer:     Outer edge of the noise sidebands, Hz from the peak.
+
+    Returns:
+        Linear power ratio peak/noise (use 10·log10 for dB).  Returns NaN if
+        no frequency bins fall inside the sidebands, and +inf if the sideband
+        median is zero.
+    """
+    offset = np.abs(f - peak_freq)
+    sideband = (offset >= inner) & (offset <= outer)
+    if not sideband.any():
+        return float('nan')
+    noise_floor = np.median(den[sideband])
+    peak_power = den[np.argmin(offset)]
+    if noise_floor <= 0:
+        return float('inf')
+    return float(peak_power / noise_floor)
 
 
 # ── File I/O ──────────────────────────────────────────────────────────────────
@@ -283,7 +357,13 @@ class PPMCalc:
         Uses scipy.signal.periodogram rather than a bare FFT because the
         periodogram normalises the power spectral density by the sample rate,
         making peak magnitudes comparable across measurements with different
-        numbers of samples or sample rates.
+        numbers of samples or sample rates.  A Hann window is applied to
+        reduce spectral leakage from the record edges, which would otherwise
+        smear power away from the Larmor peak into neighbouring bins.
+
+        Detected peaks are refined by parabolic interpolation (see
+        interpolate_peak), so the returned frequencies are not quantised to
+        the periodogram bin width.
 
         The plot X axis is limited to [low_freq, high_freq] so only the region
         of interest around the Larmor frequency is visible.  The Y axis scales
@@ -305,7 +385,8 @@ class PPMCalc:
             The first element is the strongest candidate for the Larmor frequency.
             Returns an empty list if no peaks exceed the threshold.
         """
-        f, den = sig.periodogram(self._signal_data, self._sample_rate)
+        f, den = sig.periodogram(self._signal_data, self._sample_rate,
+                                 window='hann')
 
         # Scale the Y axis to the tallest peak in the visible frequency window
         # so the plot is readable regardless of absolute signal level.
@@ -322,6 +403,8 @@ class PPMCalc:
         plt.close(fig)
 
         peaks_idx, _ = sig.find_peaks(den, height=threshold)
-        # Sort strongest first so that peaks[0] is always the best candidate.
-        peaks = sorted([(f[p], den[p]) for p in peaks_idx], key=lambda x: -x[1])
+        # Refine each peak to sub-bin precision, then sort strongest first so
+        # that peaks[0] is always the best candidate.
+        peaks = sorted([interpolate_peak(f, den, p) for p in peaks_idx],
+                       key=lambda x: -x[1])
         return peaks
