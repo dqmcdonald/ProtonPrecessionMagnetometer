@@ -1,13 +1,44 @@
 # Analysis & Pulse-Program Ideas
 
-Ideas for extending the PPM's signal analysis beyond the current pipeline
-(normalise → Butterworth bandpass → periodogram → peak detection, plus the
-block-RMS envelope/T2 fit in `PPMCalc.plotAmplitudeEnvelope()` and multi-run
-periodogram averaging in `ppmrun.py`).
+Ideas for extending the PPM's signal analysis, with implementation status.
+
+The current pipeline (as of June 2026): normalise → Butterworth bandpass →
+Hann-windowed periodogram (averaged over runs, optionally
+background-subtracted) → peak detection with parabolic sub-bin interpolation →
+field + SNR report.  Plus the block-RMS envelope/T2 fit in
+`PPMCalc.plotAmplitudeEnvelope()`.
 
 Context for the numbers below: at 16 000 Hz for 1.5 s the FFT bin width is
-~0.67 Hz, which corresponds to ~16 nT — that is the current resolution floor.
-The signal itself contains far more frequency information than one bin.
+~0.67 Hz, which corresponds to ~16 nT.  That was the resolution floor until
+peak interpolation (§1.1) was added; the remaining items in §1 push toward
+the Cramér–Rao limit, which is far below one bin.
+
+## Status at a glance
+
+| Item | Section | Status |
+|------|---------|--------|
+| Parabolic peak interpolation | §1.1 | ✅ Implemented |
+| Hann windowing | §2.5 | ✅ Implemented |
+| Per-run SNR reporting | §3.1 | ✅ Implemented |
+| Background acquisition (`BKGND`) | §4.1 | ✅ Implemented |
+| Background spectral subtraction | §2.4 | ✅ Implemented |
+| Hilbert envelope / phase-slope estimation | §1.2 | Next up |
+| Zero-phase SOS filtering | §2.1, §2.2 | Next up (with §1.2) |
+| Decaying-sinusoid time-domain fit | §1.3 | Planned |
+| Zero-crossing counting | §1.4 | Planned |
+| Spectrogram diagnostics | §1.5 | Planned |
+| Mains harmonic notching | §2.3 | Superseded in practice by §2.4 |
+| Matched (exponential) windowing | §2.5 | Planned |
+| Lorentzian lineshape fit (B ± σ) | §3.2 | Planned |
+| Cross-run statistics / Allan deviation | §3.3 | Planned |
+| IGRF sanity check | §3.4 | Planned |
+| Robust normalisation | §3.5 | Planned (small fix) |
+| T1 measurement sweep | §4.2 | Planned (Pi-side only) |
+| Delay sweep | §4.3 | Planned (Pi-side only) |
+| Continuous logging mode | §4.4 | Planned |
+| Polarity alternation / phase cycling | §4.5 | Idea (needs H-bridge hardware) |
+| Earth's-field NMR pulse sequences | §4.6 | Out of scope |
+| Timer-paced ADC sampling | §5 | Planned (firmware) |
 
 ---
 
@@ -102,7 +133,9 @@ Options:
 - `scipy.signal.iircomb` at 50 Hz (notches every harmonic), or individual
   `iirnotch` filters at 2400 / 2450 / 2500 Hz;
 - but a notch exactly at f_L costs signal, so the better mitigation is usually
-  background subtraction (§2.4).
+  background subtraction (§2.4 — now implemented, making explicit notching
+  largely unnecessary; revisit only if non-stationary interference appears
+  that subtraction cannot remove).
 
 ### 2.4 Background spectral subtraction  *(IMPLEMENTED)*
 
@@ -110,8 +143,8 @@ Record a background run in the same session (no sample, or no polarise pulse —
 see §4.1) and subtract its periodogram from the measurement periodogram.
 Amplifier noise and mains interference are stationary across the two; the
 precession peak is not. This suppresses the harmonic comb without touching the
-signal. The existing `nosample.dat` / `newamp_no_sample.dat` files can be used
-to prototype this today.
+signal. Existing recordings such as `nosample.dat` / `newamp_no_sample.dat`
+can be used as the background via `--background-input`.
 
 > Implemented: `--background-runs N` collects coil-off acquisitions before
 > the measurement runs; `--background-input FILE` uses an existing recording
@@ -176,9 +209,11 @@ downstream.
 
 ## 4. Pulse programs
 
-The firmware currently implements one sequence (polarise → settle → sample),
-but the existing command set already supports several useful "programs"
-orchestrated from the Pi, plus a couple needing small firmware changes.
+The firmware implements two sequences: the full measurement cycle
+(polarise → settle → sample, `EXECU`) and the background acquisition
+(sample only, `BKGND`, §4.1).  The existing command set already supports
+several further "programs" orchestrated entirely from the Pi, plus a couple
+needing firmware or hardware changes.
 
 ### 4.1 Background acquisition  *(IMPLEMENTED)*
 
