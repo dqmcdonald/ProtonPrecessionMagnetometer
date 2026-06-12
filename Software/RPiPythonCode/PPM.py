@@ -24,6 +24,11 @@ Measurement sequence
 8. After sampling, the MOSFET is allowed to cool for COOL_DOWN milliseconds
    before another measurement can be requested.
 
+A background acquisition (BKGND instead of EXECU) performs steps 5-7 only,
+with the coil never energised: it records amplifier noise and ambient
+interference for background spectral subtraction, and skips the polarise,
+settle, and cool-down phases.
+
 Serial protocol
 ---------------
 Command/control is ASCII: all commands are strings terminated with '\\n' and
@@ -90,6 +95,9 @@ SAMPLE_RATE_COMMAND = "SAMRA"
 DELAY_COMMAND      = "DELAY"
 COOL_DOWN_COMMAND  = "COOLD"
 EXECUTE_COMMAND    = "EXECU"
+# Background acquisition: sample-only cycle with the coil never energised.
+# Records amplifier noise + ambient interference for spectral subtraction.
+BACKGROUND_COMMAND = "BKGND"
 
 # ── Default hardware parameters ───────────────────────────────────────────────
 
@@ -440,13 +448,21 @@ class PPMRun:
 
     # ── Measurement ───────────────────────────────────────────────────────────
 
-    def doMeasurement(self, output_path="ppm.dat"):
-        """Trigger a full polarise-wait-sample cycle and save the results.
+    def doMeasurement(self, output_path="ppm.dat", background=False):
+        """Trigger a measurement cycle and save the results.
 
-        Sends EXECU to the Arduino, waits for the hardware cycle to complete,
-        then reads the sample rate, sample count, and all ADC values from the
-        serial port.  The raw data is saved to output_path in a plain-text
-        format that can be reloaded by PPMCalc.load_from_file().
+        Sends EXECU (or BKGND when background=True) to the Arduino, waits for
+        the hardware cycle to complete, then reads the sample rate, sample
+        count, and all ADC values from the serial port.  The raw data is saved
+        to output_path in a plain-text format that can be reloaded by
+        PPMCalc.load_from_file().
+
+        A background measurement is sample-only: the polarising coil is never
+        energised, so the record contains amplifier noise and ambient
+        interference (e.g. mains harmonics) but no proton precession signal.
+        Its spectrum can be subtracted from a normal measurement's spectrum to
+        suppress interference inside the Larmor band.  The firmware skips the
+        polarise, settle, and cool-down phases for background runs.
 
         The serial port is read continuously from the moment EXECU is sent,
         rather than sleeping through the hardware cycle.  This keeps the OS
@@ -463,13 +479,15 @@ class PPMRun:
         Args:
             output_path: Path to write the raw data file.  The directory must
                          already exist.
+            background:  If True, perform a sample-only background acquisition
+                         (BKGND) instead of a full polarise-wait-sample cycle.
 
         Data file format written:
             Line 1: num_samples (integer)
             Line 2: actual_sample_rate (integer, Hz)
             Lines 3+: one ADC integer per line
         """
-        self.sendCommand(EXECUTE_COMMAND)
+        self.sendCommand(BACKGROUND_COMMAND if background else EXECUTE_COMMAND)
 
         # Start reading immediately instead of sleeping through the hardware
         # cycle.  At 250000 baud the full ~48 KB frame arrives in under 2 s,
@@ -489,8 +507,15 @@ class PPMRun:
         #   then num_samples × int16 (all little-endian).
         # The actual rate may differ from the requested rate due to timer
         # quantisation in the Arduino firmware.
-        marker_timeout = (self._cool_down + self._on_time + self._delay +
-                          self._sample_time + 2000) / 1000
+        # Background runs skip the polarise and settle phases, so on_time and
+        # delay do not contribute to their deadline.  cool_down still does: a
+        # BKGND sent during the previous run's cool-down is queued by the
+        # firmware just like EXECU.
+        if background:
+            marker_timeout = (self._cool_down + self._sample_time + 2000) / 1000
+        else:
+            marker_timeout = (self._cool_down + self._on_time + self._delay +
+                              self._sample_time + 2000) / 1000
         self._sync_to_marker(marker_timeout)
         header = self._read_exact(8)
         self._actual_sample_rate, num_samples = struct.unpack("<II", header)

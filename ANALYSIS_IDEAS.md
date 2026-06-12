@@ -104,7 +104,7 @@ Options:
 - but a notch exactly at f_L costs signal, so the better mitigation is usually
   background subtraction (§2.4).
 
-### 2.4 Background spectral subtraction
+### 2.4 Background spectral subtraction  *(IMPLEMENTED)*
 
 Record a background run in the same session (no sample, or no polarise pulse —
 see §4.1) and subtract its periodogram from the measurement periodogram.
@@ -112,6 +112,13 @@ Amplifier noise and mains interference are stationary across the two; the
 precession peak is not. This suppresses the harmonic comb without touching the
 signal. The existing `nosample.dat` / `newamp_no_sample.dat` files can be used
 to prototype this today.
+
+> Implemented: `--background-runs N` collects coil-off acquisitions before
+> the measurement runs; `--background-input FILE` uses an existing recording
+> (works in `--input` re-analysis mode too).  The background spectrum is
+> rescaled to the measurement noise floor (median per-bin ratio over the
+> analysis band) and subtracted before peak detection; SNR is still reported
+> against the unsubtracted floor.  See `ppmrun.subtract_background()`.
 
 ### 2.5 Windowing / matched weighting  *(Hann window IMPLEMENTED)*
 
@@ -173,12 +180,16 @@ The firmware currently implements one sequence (polarise → settle → sample),
 but the existing command set already supports several useful "programs"
 orchestrated from the Pi, plus a couple needing small firmware changes.
 
-### 4.1 Background acquisition  *(small firmware change)*
+### 4.1 Background acquisition  *(IMPLEMENTED)*
 
 A sample-only mode that skips the polarise phase entirely. Companion to
 spectral subtraction (§2.4), and a clean noise-floor characterisation of the
-amplifier chain. Currently `ONTIM 0` is rejected (`getOp` result must be > 0),
-so this needs either accepting 0 or a dedicated command.
+amplifier chain.
+
+> Implemented as the dedicated firmware command `BKGND`: sample + transmit
+> only, coil never energised, no settle delay or cool-down (queued like EXECU
+> if received during cool-down).  On the Pi side,
+> `PPMRun.doMeasurement(background=True)` triggers it.
 
 ### 4.2 T1 measurement  *(Pi-side only)*
 
@@ -234,8 +245,9 @@ methods can achieve.
 
 1. ~~**Parabolic peak interpolation + per-run SNR + Hann window** (§1.1, §3.1,
    §2.5) — an afternoon's work, large precision win.~~ **Done.**
-2. **Background acquisition pulse program + spectral subtraction** (§4.1,
-   §2.4) — the best interference fix given the 2450 Hz mains harmonic.
+2. ~~**Background acquisition pulse program + spectral subtraction** (§4.1,
+   §2.4) — the best interference fix given the 2450 Hz mains harmonic.~~
+   **Done.**
 3. **Hilbert envelope / phase-slope analysis** (§1.2) with zero-phase SOS
    filtering (§2.1, §2.2).
 4. **Continuous logging mode** (§4.4) with cross-run statistics (§3.3).
