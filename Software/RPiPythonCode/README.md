@@ -18,7 +18,7 @@ B (µT) = f (Hz) / 42.5775
 |-----------|--------|
 | Controller | Raspberry Pi (any model with a UART) |
 | Microcontroller | Arduino Pro Mini |
-| Serial connection | `/dev/serial0`, 57600 baud |
+| Serial connection | auto-detected (USB adapter or `/dev/serial0`), 250000 baud — override with `--port` |
 | Coil | Solenoid wound around a water-filled sample bottle |
 
 The Arduino controls the polarising coil (MOSFET switched) and samples the precession

@@ -65,9 +65,10 @@ class TestArgumentParser(unittest.TestCase):
         args = self.parse([])
         self.assertFalse(args.verbose)
 
-    def test_port_default(self):
+    def test_port_default_is_autodetect(self):
+        # None means "auto-detect": collect_runs() calls PPM.find_arduino_port().
         args = self.parse([])
-        self.assertEqual(args.port, "/dev/serial0")
+        self.assertIsNone(args.port)
 
     def test_port_flag(self):
         args = self.parse(["--port", "/dev/ttyUSB0"])

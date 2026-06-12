@@ -43,6 +43,7 @@ The on-disk ``.dat`` files remain plain text (see PPMCalc.load_from_file); only
 the over-the-wire transfer is binary.
 """
 
+import os
 import serial
 import struct
 import time
@@ -59,8 +60,25 @@ DATA_MARKER = b"PPMD"
 
 # ── Serial port configuration ─────────────────────────────────────────────────
 
-BAUD_RATE = 57600        # Must match the baud rate compiled into the Arduino firmware.
+# Must match the baud rate compiled into the Arduino firmware.  250000 is an
+# exact divisor of both the 8 MHz and 16 MHz AVR clocks (0% baud-rate error,
+# unlike 57600/115200) and moves the ~48 KB binary frame in ~1.9 s instead of
+# ~8.3 s at 57600.
+BAUD_RATE = 250000
 DEFAULT_PORT = '/dev/serial0'  # Raspberry Pi hardware UART; override with --port.
+
+# USB vendor IDs that identify an Arduino or the USB-serial bridge chips
+# commonly found on Arduino boards and programming adapters.  A Pro Mini has
+# no USB hardware of its own, so it enumerates as its programming adapter —
+# typically an FTDI FT232R.
+ARDUINO_USB_VIDS = {
+    0x2341,  # Arduino SA
+    0x2A03,  # Arduino.org
+    0x1B4F,  # SparkFun
+    0x0403,  # FTDI (FT232R — classic Pro Mini programming adapter)
+    0x1A86,  # WCH CH340 (common on clone boards/adapters)
+    0x10C4,  # Silicon Labs CP210x
+}
 
 # ── Arduino command strings ───────────────────────────────────────────────────
 # Each command is a 5-character token.  The Arduino parser matches on these
@@ -131,6 +149,67 @@ def scan_ports():
             "Install or upgrade pyserial:  pip install --upgrade pyserial")
     ports = serial.tools.list_ports.comports()
     return [(p.device, p.description, p.hwid) for p in sorted(ports)]
+
+
+def find_arduino_port(lg=None):
+    """Auto-detect the serial port the Arduino is connected to.
+
+    Detection strategy, in order of preference:
+
+    1. USB serial interfaces whose vendor ID matches a known Arduino or
+       USB-serial bridge chip (see ARDUINO_USB_VIDS).
+    2. Any port whose device name looks like a USB serial adapter
+       (ttyUSB*/ttyACM* on Linux, tty.usbserial*/tty.usbmodem* on macOS),
+       to cover adapters with unrecognised vendor IDs.
+    3. The Raspberry Pi hardware UART (DEFAULT_PORT), if it exists.  A direct
+       UART connection has no USB descriptor to recognise, so its mere
+       presence is the fallback when no USB adapter is found.
+
+    If several USB candidates are found, the first (sorted by device name) is
+    used and the alternatives are logged; pass an explicit port to PPMRun (the
+    --port CLI option) to override.
+
+    Args:
+        lg: Optional logging.Logger for reporting the choice made.
+
+    Returns:
+        Device path string, e.g. '/dev/tty.usbserial-A906H87T'.
+
+    Raises:
+        IOError: if no plausible Arduino port can be found.
+    """
+    import serial.tools.list_ports
+
+    def log(msg):
+        if lg:
+            lg.info(msg)
+
+    ports = sorted(serial.tools.list_ports.comports(), key=lambda p: p.device)
+
+    candidates = [p.device for p in ports if p.vid in ARDUINO_USB_VIDS]
+    if not candidates:
+        usb_names = ('ttyUSB', 'ttyACM', 'usbserial', 'usbmodem')
+        candidates = [p.device for p in ports
+                      if any(name in p.device for name in usb_names)]
+
+    if candidates:
+        if len(candidates) > 1:
+            log("Multiple USB serial adapters found ({}); using {}. "
+                "Use --port to override.".format(
+                    ", ".join(candidates), candidates[0]))
+        else:
+            log("Auto-detected Arduino on {}".format(candidates[0]))
+        return candidates[0]
+
+    if os.path.exists(DEFAULT_PORT):
+        log("No USB serial adapter found; falling back to hardware UART "
+            "{}".format(DEFAULT_PORT))
+        return DEFAULT_PORT
+
+    raise IOError(
+        "Could not auto-detect the Arduino: no USB serial adapter found and "
+        "{} does not exist.  Use --list-ports to see available ports and "
+        "--port to specify one explicitly.".format(DEFAULT_PORT))
 
 
 class PPMRun:
@@ -281,21 +360,38 @@ class PPMRun:
             buf.extend(chunk)
         return bytes(buf)
 
-    def _sync_to_marker(self):
+    def _sync_to_marker(self, timeout_s):
         """Consume bytes from the serial port up to and including DATA_MARKER.
 
         The marker lets the host find the start of the binary frame even if a
         stray byte (such as a late command acknowledgement) precedes it.  Uses
         a sliding window so the marker is detected at any byte offset.
 
+        An empty read (the 1 s serial timeout expiring) is retried rather than
+        treated as a failure, until timeout_s has elapsed overall.  This
+        matters from the second run of a multi-run session onwards: an EXECU
+        sent while the Arduino is still in its MOSFET cool-down phase is
+        queued by the firmware and only executed when cool-down completes, so
+        the data frame can legitimately arrive up to a full cool-down period
+        later than the nominal measurement cycle time.
+
+        Args:
+            timeout_s: Overall deadline in seconds.  IOError is raised if the
+                       marker has not appeared after this long.
+
         Raises:
-            IOError: if the serial port times out before the marker is found.
+            IOError: if the marker is not seen within timeout_s.
         """
+        deadline = time.monotonic() + timeout_s
         window = bytearray()
         while True:
             byte = self._ser.read(1)
             if not byte:
-                raise IOError("Timed out waiting for binary data marker")
+                if time.monotonic() >= deadline:
+                    raise IOError(
+                        "Timed out waiting for binary data marker "
+                        "after {:.1f} s".format(timeout_s))
+                continue
             window.extend(byte)
             if len(window) > len(DATA_MARKER):
                 del window[0]
@@ -352,10 +448,17 @@ class PPMRun:
         serial port.  The raw data is saved to output_path in a plain-text
         format that can be reloaded by PPMCalc.load_from_file().
 
-        The sleep duration is computed from the configured hardware parameters
-        rather than being hardcoded, so that it remains correct if on_time or
-        other timings are changed via configure().  A 2-second buffer is added
-        to account for Arduino processing overhead and inter-byte gaps.
+        The serial port is read continuously from the moment EXECU is sent,
+        rather than sleeping through the hardware cycle.  This keeps the OS
+        receive buffer drained: at 250000 baud the entire data frame arrives
+        faster than the measurement cycle completes, and a host that is not
+        reading loses everything beyond the OS buffer size (~16 KB on macOS).
+
+        The overall deadline for the data marker is computed from the
+        configured hardware parameters: cool_down (an EXECU sent during the
+        previous run's cool-down is queued by the firmware until cool-down
+        completes) + on_time + delay + sample_time, plus a 2-second margin
+        for Arduino processing overhead.
 
         Args:
             output_path: Path to write the raw data file.  The directory must
@@ -368,20 +471,27 @@ class PPMRun:
         """
         self.sendCommand(EXECUTE_COMMAND)
 
-        # Wait for the Arduino to complete the full hardware cycle before
-        # attempting to read results.  The total cycle time is:
-        #   ON_TIME (polarise) + DELAY (transient settle) + SAMPLE_TIME (ADC)
-        # The extra 2000 ms absorbs Arduino processing overhead and serial
-        # buffering delays.
-        total_wait = (self._on_time + self._delay + self._sample_time + 2000) / 1000
-        time.sleep(total_wait)
-
+        # Start reading immediately instead of sleeping through the hardware
+        # cycle.  At 250000 baud the full ~48 KB frame arrives in under 2 s,
+        # which is faster than the measurement cycle itself — a blind sleep
+        # here lets the frame land in the OS serial receive buffer (~16 KB on
+        # macOS) and everything past the buffer limit is silently dropped.
+        # _sync_to_marker() polls the port, draining it as data arrives.
+        #
+        # The deadline covers the worst case: an EXECU sent during the
+        # previous run's cool-down is queued by the firmware and only starts
+        # when cool-down completes, followed by the full polarise + settle +
+        # sample cycle.  The extra 2000 ms absorbs Arduino processing
+        # overhead and serial buffering delays.
+        #
         # The measurement is returned as one binary frame:
         #   marker b'PPMD', uint32 actual_sample_rate, uint32 num_samples,
         #   then num_samples × int16 (all little-endian).
         # The actual rate may differ from the requested rate due to timer
         # quantisation in the Arduino firmware.
-        self._sync_to_marker()
+        marker_timeout = (self._cool_down + self._on_time + self._delay +
+                          self._sample_time + 2000) / 1000
+        self._sync_to_marker(marker_timeout)
         header = self._read_exact(8)
         self._actual_sample_rate, num_samples = struct.unpack("<II", header)
         self.log("Actual Sample Rate:  '{}' samples/s".format(self._actual_sample_rate))

@@ -60,10 +60,11 @@ def build_parser():
         description="Proton Precession Magnetometer data collection and analysis")
 
     # ── Serial port ───────────────────────────────────────────────────────────
-    p.add_argument("--port", default="/dev/serial0", metavar="DEV",
+    p.add_argument("--port", default=None, metavar="DEV",
                    help="Serial port connected to the Arduino, e.g. "
                         "/dev/ttyUSB0 or /dev/ttyAMA0.  Use --list-ports "
-                        "to see available ports (default: /dev/serial0)")
+                        "to see available ports (default: auto-detect a USB "
+                        "serial adapter, falling back to /dev/serial0)")
 
     p.add_argument("--list-ports", action="store_true",
                    help="Scan and print all available serial ports, then exit. "
@@ -206,8 +207,14 @@ def collect_runs(args, run_dir, logger, verbose=False):
     import PPM   # deferred import — requires pyserial and a live serial port
 
     results = []
-    vprint("Opening serial port {} at {} baud".format(args.port, PPM.BAUD_RATE), verbose)
-    ppm = PPM.PPMRun(logger, port=args.port)
+    # --port omitted: locate the Arduino automatically (USB vendor ID match,
+    # then device-name heuristic, then the Pi hardware UART).
+    port = args.port
+    if port is None:
+        port = PPM.find_arduino_port(logger)
+        vprint("Auto-detected Arduino on {}".format(port), verbose)
+    vprint("Opening serial port {} at {} baud".format(port, PPM.BAUD_RATE), verbose)
+    ppm = PPM.PPMRun(logger, port=port)
     ppm.configure(
         on_time=args.on_time,
         sample_time=args.sample_time,

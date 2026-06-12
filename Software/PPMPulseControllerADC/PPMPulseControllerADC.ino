@@ -88,8 +88,10 @@ const unsigned long MAX_SAMPLES = 65536UL;
 const int TEST_INT    = 42;
 const int NUM_MEMTESTS = 10;
 
-// Serial baud rate — must match PPM.py BAUD_RATE.
-const long BAUD_RATE = 57600;
+// Serial baud rate — must match PPM.py BAUD_RATE.  250000 divides both the
+// 8 MHz and 16 MHz AVR clocks exactly (0% baud error, unlike 57600/115200)
+// and cuts the ~48 KB data frame transfer from ~8.3 s to ~1.9 s.
+const long BAUD_RATE = 250000;
 
 // Command buffer: longest possible command is "COOLD 10000\n" = 12 chars.
 const int SERIAL_BUFF_LEN = 32;
@@ -132,7 +134,7 @@ char serial_buff[SERIAL_BUFF_LEN];
 // Measurement parameters — Pi overrides these before each run via commands.
 // Defaults match PPM.py defaults so a freshly powered Arduino behaves sensibly
 // even if the Pi does not send configuration.
-int coil_activation_time = 6000;   // ms  polarisation time (~2 × T1 for water)
+int coil_activation_time = 2000;   // ms  polarisation time (~2 × T1 for water)
 int sample_delay         = 500;    // ms  transient settle time after coil off
 int cool_down_period     = 10000;  // ms  MOSFET thermal recovery between runs
 int sample_rate          = 16000;  // used only to compute num_samples (see SAMRA note)

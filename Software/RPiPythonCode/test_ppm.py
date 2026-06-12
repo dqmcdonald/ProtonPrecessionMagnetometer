@@ -60,6 +60,47 @@ def attach_serial_frame(ppm, frame, ack=b"OK EXECU\n"):
     ppm._ser.read.side_effect = fake_read
 
 
+def fake_port(device, vid=None):
+    """Stand-in for a pyserial ListPortInfo with just the fields we use."""
+    from types import SimpleNamespace
+    return SimpleNamespace(device=device, vid=vid)
+
+
+class TestFindArduinoPort(unittest.TestCase):
+    """find_arduino_port() picks USB adapters by vendor ID, then by device
+    name, then falls back to the Pi hardware UART."""
+
+    def _detect(self, ports, serial0_exists=False):
+        with patch.object(PPM.serial.tools.list_ports, 'comports',
+                          return_value=ports), \
+             patch("PPM.os.path.exists", return_value=serial0_exists):
+            return PPM.find_arduino_port()
+
+    def test_known_vid_preferred(self):
+        ports = [fake_port('/dev/tty.Bluetooth-Incoming-Port'),
+                 fake_port('/dev/tty.usbserial-A906H87T', vid=0x0403)]  # FTDI
+        self.assertEqual(self._detect(ports), '/dev/tty.usbserial-A906H87T')
+
+    def test_device_name_fallback_for_unknown_vid(self):
+        ports = [fake_port('/dev/ttyUSB0', vid=0x9999)]
+        self.assertEqual(self._detect(ports), '/dev/ttyUSB0')
+
+    def test_multiple_candidates_first_sorted_wins(self):
+        ports = [fake_port('/dev/ttyUSB1', vid=0x1A86),
+                 fake_port('/dev/ttyUSB0', vid=0x0403)]
+        self.assertEqual(self._detect(ports), '/dev/ttyUSB0')
+
+    def test_hardware_uart_fallback(self):
+        # No USB adapters at all, but /dev/serial0 exists (Raspberry Pi).
+        ports = [fake_port('/dev/tty.Bluetooth-Incoming-Port')]
+        self.assertEqual(self._detect(ports, serial0_exists=True),
+                         PPM.DEFAULT_PORT)
+
+    def test_nothing_found_raises(self):
+        with self.assertRaises(IOError):
+            self._detect([], serial0_exists=False)
+
+
 class TestConfigure(unittest.TestCase):
 
     def test_defaults(self):
@@ -88,37 +129,34 @@ class TestConfigure(unittest.TestCase):
         self.assertEqual(ppm._cool_down, 5000)
 
 
-class TestSleepCalculation(unittest.TestCase):
-    """doMeasurement() sleep should equal (on_time + delay + sample_time + 2000) / 1000."""
+class TestMarkerDeadline(unittest.TestCase):
+    """doMeasurement() must not sleep before reading (the OS serial buffer
+    would overflow at 250000 baud) and must allow cool_down + the full
+    hardware cycle + margin before declaring the marker lost."""
 
-    def _expected_sleep(self, on_time, delay, sample_time):
-        return (on_time + delay + sample_time + 2000) / 1000
-
-    def test_default_sleep(self):
-        expected = self._expected_sleep(6000, 500, 1500)  # = 10.0 s
-        self.assertAlmostEqual(expected, 10.0)
-
-    def test_custom_sleep(self):
-        expected = self._expected_sleep(3000, 200, 800)  # = 6.0 s
-        self.assertAlmostEqual(expected, 6.0)
-
-    def _sleep_used_in_measurement(self, on_time, sample_time, delay):
-        ppm = make_ppm(on_time=on_time, sample_time=sample_time, delay=delay)
-        n_samples = 100
-        attach_serial_frame(ppm, make_data_frame(16000, n_samples))
-
-        with patch("time.sleep") as mock_sleep, \
+    def _measure(self, on_time=6000, sample_time=1500, delay=500,
+                 cool_down=10000):
+        ppm = make_ppm(on_time=on_time, sample_time=sample_time,
+                       delay=delay, cool_down=cool_down)
+        attach_serial_frame(ppm, make_data_frame(16000, 10))
+        with patch.object(ppm, '_sync_to_marker',
+                          wraps=ppm._sync_to_marker) as sync_spy, \
+             patch("time.sleep") as mock_sleep, \
              patch("builtins.open", unittest.mock.mock_open()):
             ppm.doMeasurement(output_path="/dev/null")
-        return mock_sleep.call_args[0][0]
+        return sync_spy, mock_sleep
 
-    def test_sleep_matches_formula_defaults(self):
-        elapsed = self._sleep_used_in_measurement(6000, 1500, 500)
-        self.assertAlmostEqual(elapsed, self._expected_sleep(6000, 500, 1500))
+    def test_no_blind_sleep_before_reading(self):
+        _, mock_sleep = self._measure()
+        mock_sleep.assert_not_called()
 
-    def test_sleep_matches_formula_custom(self):
-        elapsed = self._sleep_used_in_measurement(3000, 800, 200)
-        self.assertAlmostEqual(elapsed, self._expected_sleep(3000, 200, 800))
+    def test_deadline_formula_defaults(self):
+        sync_spy, _ = self._measure(6000, 1500, 500, 10000)
+        self.assertAlmostEqual(sync_spy.call_args[0][0], 20.0)
+
+    def test_deadline_formula_custom(self):
+        sync_spy, _ = self._measure(2000, 1000, 200, 5000)
+        self.assertAlmostEqual(sync_spy.call_args[0][0], 10.2)
 
 
 class TestSendConfiguredValues(unittest.TestCase):
@@ -202,6 +240,42 @@ class TestDoMeasurement(unittest.TestCase):
         with patch("time.sleep"), patch("builtins.open", unittest.mock.mock_open()):
             with self.assertRaises(IOError):
                 ppm.doMeasurement(output_path="/dev/null")
+
+    def test_marker_wait_survives_cool_down(self):
+        """Empty reads before the marker (Arduino still cooling) are retried.
+
+        From run 2 onwards the firmware queues an EXECU received during
+        cool-down, so the data frame arrives later than the nominal cycle
+        time.  Each empty read simulates the 1 s serial timeout expiring while
+        the Arduino is still cooling; the sync must keep waiting rather than
+        raise.
+        """
+        ppm = make_ppm()
+        frame = make_data_frame(16000, 5)
+        empty_reads = [b"", b"", b""]
+        buf = {"data": frame}
+
+        def fake_read(size=1):
+            if empty_reads:
+                return empty_reads.pop(0)
+            chunk = buf["data"][:size]
+            buf["data"] = buf["data"][size:]
+            return chunk
+
+        ppm._ser.readline.return_value = b"OK EXECU\n"
+        ppm._ser.read.side_effect = fake_read
+        with patch("time.sleep"), patch("builtins.open", unittest.mock.mock_open()):
+            ppm.doMeasurement(output_path="/dev/null")
+        self.assertEqual(len(ppm.getSignalData()), 5)
+        self.assertEqual(ppm.getActualSampleRate(), 16000)
+
+    def test_marker_timeout_raises_after_deadline(self):
+        """If the marker never arrives, _sync_to_marker raises once the
+        overall deadline has passed instead of waiting forever."""
+        ppm = make_ppm()
+        ppm._ser.read.return_value = b""
+        with self.assertRaises(IOError):
+            ppm._sync_to_marker(0)
 
     def test_file_written_as_plaintext(self):
         """The .dat file stays plain text: num_samples, rate, then one int/line."""
