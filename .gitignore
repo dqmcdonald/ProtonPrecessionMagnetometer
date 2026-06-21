@@ -6,3 +6,6 @@ DataSheets/
 *-backups/
 *.log
 magnum1/
+debug/
+Software/RPiPythonCode/data/
+Software/RPiPythonCode/old_data/
