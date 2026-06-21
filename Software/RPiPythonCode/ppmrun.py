@@ -171,6 +171,10 @@ def build_parser():
                    help="Base directory under which timestamped run directories "
                         "are created (default: data/)")
 
+    p.add_argument("--title", default=None, metavar="STR",
+                   help="Title shown on the generated plots.  Defaults to the "
+                        "run directory name (<tag>_<timestamp>)")
+
     return p
 
 
@@ -476,6 +480,11 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
     f_axis = None         # frequency axis (same for all runs at the same rate)
     n_runs = len(runs_data)
 
+    # Plot title: explicit --title if given, otherwise the run directory name
+    # (<tag>_<timestamp>), which identifies the measurement at a glance.
+    plot_title = getattr(args, "title", None) or os.path.basename(
+        run_dir.rstrip("/"))
+
     vprint("\nAnalysis pipeline ({} run{})".format(n_runs, "s" if n_runs > 1 else ""), verbose)
 
     for i, (sample_rate, sample_time, signal_data) in enumerate(runs_data):
@@ -486,7 +495,7 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
         if not args.no_plots:
             path = os.path.join(run_dir, "original_{:02d}.png".format(i))
             vprint("  [{}] Saving raw signal plot → {}".format(i, path), verbose)
-            calc.plotSignal(path)
+            calc.plotSignal(path, title="{} — raw, run {}".format(plot_title, i))
 
         vprint("  [{}] Applying Butterworth bandpass filter "
                "{:.0f}–{:.0f} Hz...".format(i, args.low_freq, args.high_freq), verbose)
@@ -495,7 +504,8 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
         if not args.no_plots:
             path = os.path.join(run_dir, "filtered_{:02d}.png".format(i))
             vprint("  [{}] Saving filtered signal plot → {}".format(i, path), verbose)
-            calc.plotSignal(path)
+            calc.plotSignal(
+                path, title="{} — filtered, run {}".format(plot_title, i))
 
         # Compute periodogram on the filtered signal.  The frequency resolution
         # is sample_rate / num_samples ≈ 1 Hz for a 16000-sample, 1-second record.
@@ -554,6 +564,20 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
             if logger:
                 logger.info(msg)
 
+    # ── Peak detection ────────────────────────────────────────────────────────
+    # Run before plotting so the detected peaks can be labelled on the figure.
+    # find_peaks works on the full periodogram array, not just the plotted
+    # window, to avoid missing a peak near the edge of the display range.
+    # Each detected peak is refined to sub-bin precision by parabolic
+    # interpolation before sorting.
+    vprint("  Running peak detection (threshold={})...".format(
+        args.fft_threshold), verbose)
+    peaks_idx, _ = sig.find_peaks(averaged_den, height=args.fft_threshold)
+    peaks = sorted([PPMCalc.interpolate_peak(f_axis, averaged_den, p)
+                    for p in peaks_idx], key=lambda x: -x[1])
+    vprint("  Found {} peak{} above threshold".format(
+        len(peaks), "s" if len(peaks) != 1 else ""), verbose)
+
     # ── Plot the averaged FFT ─────────────────────────────────────────────────
     import matplotlib
     matplotlib.use('Agg')
@@ -569,6 +593,32 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
     ax.bar(f_axis, averaged_den, width=(f_axis[1] - f_axis[0]))
     ax.set_ylim([0, y_max])
     ax.set_xlim([args.low_freq, args.high_freq])
+    ax.set_title(plot_title)
+
+    # Label detected peaks inside the visible window with their frequency and
+    # the implied field (B = f / γ).  The strongest peak also shows the field
+    # value; the rest are frequency-only to limit clutter.  Peaks within
+    # LABEL_MIN_SEP_HZ of an already-labelled (stronger) peak are skipped so the
+    # spectral-leakage skirt around a strong line does not smear overlapping
+    # labels together; genuinely distinct peaks (e.g. interference spurs) are
+    # still labelled.  Capped at eight overall.
+    LABEL_MIN_SEP_HZ = 40.0
+    labelled_freqs = []
+    for rank, (f_pk, mag) in enumerate(peaks):
+        if rank >= 8 or not (args.low_freq <= f_pk <= args.high_freq):
+            continue
+        if any(abs(f_pk - lf) < LABEL_MIN_SEP_HZ for lf in labelled_freqs):
+            continue
+        if not labelled_freqs:   # the strongest labelled peak
+            text = "{:.1f} Hz\n{:.2f} µT".format(f_pk, f_pk / GAMMA_HZ_PER_UT)
+        else:
+            text = "{:.1f} Hz".format(f_pk)
+        labelled_freqs.append(f_pk)
+        ax.annotate(text, xy=(f_pk, mag), xytext=(0, 8),
+                    textcoords="offset points", ha="center", va="bottom",
+                    fontsize=8, color="red",
+                    arrowprops=dict(arrowstyle="-", lw=0.5, color="red"))
+
     ax.set_xlabel("Frequency (Hz)")
     ylabel = "Power spectral density (averaged over {} run{}{})".format(
         n_runs, "s" if n_runs > 1 else "",
@@ -576,19 +626,6 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
     ax.set_ylabel(ylabel)
     fig.savefig(fft_path)
     plt.close(fig)
-
-    # ── Peak detection ────────────────────────────────────────────────────────
-    # find_peaks works on the full periodogram array, not just the plotted
-    # window, to avoid missing a peak near the edge of the display range.
-    # Each detected peak is refined to sub-bin precision by parabolic
-    # interpolation before sorting.
-    vprint("  Running peak detection (threshold={})...".format(
-        args.fft_threshold), verbose)
-    peaks_idx, _ = sig.find_peaks(averaged_den, height=args.fft_threshold)
-    peaks = sorted([PPMCalc.interpolate_peak(f_axis, averaged_den, p)
-                    for p in peaks_idx], key=lambda x: -x[1])
-    vprint("  Found {} peak{} above threshold".format(
-        len(peaks), "s" if len(peaks) != 1 else ""), verbose)
 
     # SNR of the strongest peak — the headline quality figure for the whole
     # measurement session.  Measured against the unsubtracted spectrum so the

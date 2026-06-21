@@ -223,7 +223,7 @@ class PPMCalc:
 
     # ── Plotting ──────────────────────────────────────────────────────────────
 
-    def plotSignal(self, file_name, window=500):
+    def plotSignal(self, file_name, window=150, title=None):
         """Save a three-panel plot of the signal at the start, middle, and end.
 
         Showing three windows with a shared Y axis makes the exponential decay
@@ -236,8 +236,11 @@ class PPMCalc:
 
         Args:
             file_name: Output PNG path.
-            window:    Number of samples to show in each panel (default 500,
-                       ≈ 31 ms at 16000 Hz, covering ~75 precession cycles).
+            window:    Number of samples to show in each panel (default 150,
+                       ≈ 9 ms at 16000 Hz, ~23 precession cycles at 2.4 kHz —
+                       few enough that individual oscillations stay legible
+                       instead of smearing into a solid block).
+            title:     Optional figure title (suptitle) spanning the panels.
         """
         n = len(self._signal_data)
         half = window // 2
@@ -254,11 +257,19 @@ class PPMCalc:
         # which is essential for visually comparing amplitudes.
         fig, axes = plt.subplots(1, 3, figsize=(20, 5), dpi=80, sharey=True)
         for ax, (label, sl) in zip(axes, slices):
-            ax.plot(self._time[sl], self._signal_data[sl])
+            # Plot time in milliseconds.  At the Larmor frequency (~2.4 kHz) the
+            # period is only ~0.4 ms, so a seconds axis packs dozens of cycles
+            # between tick labels and the waveform reads as a solid block; ms
+            # ticks make the individual oscillations visible.
+            ax.plot(self._time[sl] * 1000.0, self._signal_data[sl])
             ax.set_title(label)
-            ax.set_xlabel("Time (s)")
+            ax.set_xlabel("Time (ms)")
         axes[0].set_ylabel("Amplitude")
-        fig.tight_layout()
+        if title:
+            fig.suptitle(title)
+        # Leave headroom at the top for the suptitle so it does not overlap the
+        # panel titles ("Start"/"Middle"/"End").
+        fig.tight_layout(rect=[0, 0, 1, 0.95] if title else None)
         fig.savefig(file_name)
         plt.close(fig)   # release memory; important in multi-run loops
 
@@ -351,7 +362,8 @@ class PPMCalc:
 
     # ── Frequency analysis ────────────────────────────────────────────────────
 
-    def doFFT(self, filename, low_freq=2600, high_freq=3400, threshold=0.02):
+    def doFFT(self, filename, low_freq=2600, high_freq=3400, threshold=0.02,
+              title=None):
         """Compute a periodogram, save a plot, and return detected peaks.
 
         Uses scipy.signal.periodogram rather than a bare FFT because the
@@ -379,6 +391,7 @@ class PPMCalc:
             low_freq:   Lower frequency bound for the plot in Hz (default 2600).
             high_freq:  Upper frequency bound for the plot in Hz (default 3400).
             threshold:  Minimum periodogram magnitude to qualify as a peak.
+            title:      Optional plot title.
 
         Returns:
             List of (freq_hz, magnitude) tuples sorted by magnitude descending.
@@ -387,6 +400,13 @@ class PPMCalc:
         """
         f, den = sig.periodogram(self._signal_data, self._sample_rate,
                                  window='hann')
+
+        # Detect peaks first so they can be annotated on the plot below.
+        # Refine each peak to sub-bin precision, then sort strongest first so
+        # that peaks[0] is always the best candidate.
+        peaks_idx, _ = sig.find_peaks(den, height=threshold)
+        peaks = sorted([interpolate_peak(f, den, p) for p in peaks_idx],
+                       key=lambda x: -x[1])
 
         # Scale the Y axis to the tallest peak in the visible frequency window
         # so the plot is readable regardless of absolute signal level.
@@ -397,14 +417,30 @@ class PPMCalc:
         ax.bar(f, den, width=(f[1] - f[0]))
         ax.set_ylim([0, y_max])
         ax.set_xlim([low_freq, high_freq])
+
+        # Label each detected peak inside the plotted window with its frequency.
+        # Limited to the eight strongest so a noisy spectrum (low threshold)
+        # does not bury the plot under annotations.  Peaks within
+        # LABEL_MIN_SEP_HZ of an already-labelled (stronger) peak are skipped so
+        # the spectral-leakage skirt around a strong line does not smear
+        # overlapping labels together.
+        LABEL_MIN_SEP_HZ = 40.0
+        labelled_freqs = []
+        for rank, (f_pk, mag) in enumerate(peaks):
+            if rank >= 8 or not (low_freq <= f_pk <= high_freq):
+                continue
+            if any(abs(f_pk - lf) < LABEL_MIN_SEP_HZ for lf in labelled_freqs):
+                continue
+            labelled_freqs.append(f_pk)
+            ax.annotate("{:.1f} Hz".format(f_pk), xy=(f_pk, mag),
+                        xytext=(0, 8), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=8, color="red",
+                        arrowprops=dict(arrowstyle="-", lw=0.5, color="red"))
+
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("Power spectral density")
+        if title:
+            ax.set_title(title)
         fig.savefig(filename)
         plt.close(fig)
-
-        peaks_idx, _ = sig.find_peaks(den, height=threshold)
-        # Refine each peak to sub-bin precision, then sort strongest first so
-        # that peaks[0] is always the best candidate.
-        peaks = sorted([interpolate_peak(f, den, p) for p in peaks_idx],
-                       key=lambda x: -x[1])
         return peaks
