@@ -8,6 +8,75 @@ Generated from a debugging discussion on 2026-06-03.
 
 ---
 
+## ⇒ START HERE — CURRENT STATUS & TOP NEXT STEP (as of 2026-06-24)
+
+**The whole signal chain is verified EXCEPT one link.** Everything below has been
+tested and exonerated over this log:
+
+- **Polarization** — 8.6 A coil current, ~90 G field (compass + Hall sensor),
+  fast **non-adiabatic quench ~120 µs** ≪ the 411 µs Larmor period (6/12, 6/23). ✓
+- **Sensor-coil cancellation** (series-opposition gradiometer) — spatial-null
+  test passes (6/13). ✓
+- **Amplifier** — book INA217 amp restored; the chronic 7.7 kHz oscillation is
+  gone (6/21). ✓
+- **Acquisition → FFT → frequency/field calibration** — an injected sig-gen tone
+  is detected at the right frequency and back-calculates the right field, 52–60 dB
+  SNR (6/13, 6/21). ✓
+- **Sensor tank resonance** — measured L ≈ 5.4 mH, low Q ≈ 5 (BW ≈ 500 Hz),
+  tunable via the SW1 bank (6/19, 6/21). ✓
+
+**The one untested link = is a real precessing magnetization actually being
+generated and presented to the sensor?** None of the above tests touch this, and
+it comes down almost entirely to **ORIENTATION**.
+
+### TOP NEXT STEP: empirically find the coil orientation
+
+Signal ∝ the angle θ between the coil axis and the **local** field — **maximal
+when the axis is perpendicular to the field, exactly ZERO when parallel**
+(≈ sin²θ). This is the only remaining *all-or-nothing* variable: it can null the
+signal to zero with perfect electronics, which is exactly the "works, but same
+with/without sample" symptom. After the non-adiabatic quench the magnetization
+points along the old polarizing axis; only its component transverse to Earth's
+field precesses, so an axis near parallel to the field detects nothing.
+
+**Basalt twist — do NOT trust the 68°35′ model inclination.** That angle is from
+the IGRF *model*; the 2380 Hz line already shows the local field is offset
+~1000+ nT from the model (basalt crustal anomaly), and a crustal anomaly tilts
+the field *direction* too, not just its magnitude. **Find the right tilt by
+experiment, not calculation.**
+
+How:
+1. Take a `sample` + matched `no-sample` pair at a grid of platform tilts around
+   the expected perpendicular (≈ ±30° in ~10–15° steps; add a couple of azimuths
+   if the platform allows).
+2. At each, run `Software/RPiPythonCode/compare_runs.py` and **search WIDE in
+   frequency (~2200–2600 Hz)** — hunt for the one peak that is *both*
+   sample-dependent *and* decaying, wherever it lands.
+3. The orientation where that decaying, sample-only peak emerges/maximizes is the
+   answer — and it simultaneously gives you the true local field *direction*
+   (worth having, since the model value is untrustworthy on basalt).
+
+**Stack the cheap signal-maximizers first** so the sweep has something to show:
+- **Fill the sensor coil bore** (filling factor, ~3–5× / 10–14 dB) — conformal bag
+  per the 2026-06-13 "Sample volume / filling factor" entry; **one coil only**
+  (gradiometer).
+- **Keep DELAY short (~150 ms)** — longer only loses FID to T2\* decay (basalt
+  gradients likely shorten T2\*); see the 6/24 addendum's delay analysis.
+- Distilled/degassed, bubble-free water; non-magnetic everything.
+
+**If a full orientation sweep still shows nothing** → the remaining axis is raw
+signal strength / dephasing: T2\* too short from basalt gradients (try a *smaller*
+sample in the most homogeneous part of the bore — trades filling factor for line
+width), or polarization not uniformly covering the sample. Second-order; settle
+orientation first.
+
+*(Rationale and the supporting measurements are in the 2026-06-24 follow-up +
+addendum below. Tools: `compare_runs.py` for sample-vs-no-sample overlays,
+`suppress_resonance.py` to peel the steady tank line once a co-located signal is
+suspected.)*
+
+---
+
 ## The symptom
 
 > "I get the same signal whether or not there's a sample in the coil. The
