@@ -94,7 +94,88 @@ def build_parser():
     p.add_argument("--out-dir", default=None, metavar="DIR",
                    help="Where to write compare_spectrum.png / "
                         "compare_envelope.png (default: current directory).")
+    p.add_argument("--per-run", action="store_true",
+                   help="Also print a per-run table (peak freq, SNR, decay "
+                        "head/tail) for each set, plus run-to-run spectral "
+                        "similarity — a sanity check that the average is not "
+                        "hiding or diluting a signal that differs between runs.")
     return p
+
+
+def per_run_stats(folder, low, high):
+    """Per-run peak, SNR, and decay — independent of the averaging path.
+
+    The averaged spectrum could in principle dilute a real line that wanders in
+    frequency from run to run (it can never *cancel* one — periodogram power is
+    non-negative — but a moving peak spreads across bins).  This inspects each
+    run on its own so the averaged result can be cross-checked.
+
+    For each run it reports, working from the DC-removed RAW counts (no
+    per-record range normalisation, so runs are directly comparable):
+      - peak: strongest periodogram bin inside [low, high] Hz;
+      - snr_db: that peak against the median PSD in its ±100–300 Hz sidebands;
+      - decay: zero-phase narrowband RMS of the first sixth of the record over
+        the last sixth, filtered ±30 Hz around the run's own peak.  A genuine
+        FID decays (ratio >> 1); a steady line gives ~1.
+
+    Also returns the in-band spectra so the caller can report run-to-run
+    correlation (low ⇒ incoherent noise, no strong repeatable line hiding).
+
+    Returns:
+        (rows, corr) where rows is a list of dicts and corr is the mean pairwise
+        Pearson correlation of the in-band spectra (NaN if fewer than two runs).
+    """
+    files = sorted(glob.glob(os.path.join(folder, "run_*.dat")))
+    if not files:
+        raise FileNotFoundError(
+            "No run_*.dat files found in {!r}".format(folder))
+    rows = []
+    inband_spectra = []
+    for fp in files:
+        sample_rate, _, data = load_from_file(fp)
+        x = data.astype(float)
+        x -= x.mean()                      # DC removal only — keep absolute scale
+        f, den = sig.periodogram(x, sample_rate, window='hann')
+        band = (f >= low) & (f <= high)
+        peak = f[band][np.argmax(den[band])]
+        # SNR of the peak bin vs the median floor in its sidebands.
+        offset = np.abs(f - peak)
+        sideband = (offset >= 100.0) & (offset <= 300.0)
+        floor = np.median(den[sideband]) if sideband.any() else np.nan
+        snr_db = 10.0 * np.log10(den[np.argmin(offset)] / floor)
+        # Decay at the run's OWN peak, zero-phase so there is no filter start-up
+        # transient masquerading as a decaying head.
+        b, a = sig.butter(4, [max(peak - 30, low), min(peak + 30, high)],
+                          fs=sample_rate, btype='band')
+        y = sig.filtfilt(b, a, x)
+        k = len(y) // 6
+        decay = np.sqrt(np.mean(y[:k] ** 2)) / np.sqrt(np.mean(y[-k:] ** 2))
+        rows.append({"name": os.path.basename(fp), "peak": peak,
+                     "snr_db": snr_db, "decay": decay})
+        inband_spectra.append(den[band])
+    # Pairwise spectral correlation (truncate to the shortest in case run
+    # lengths differ by a sample).
+    corr = float('nan')
+    if len(inband_spectra) > 1:
+        L = min(len(s) for s in inband_spectra)
+        C = np.corrcoef(np.array([s[:L] for s in inband_spectra]))
+        iu = np.triu_indices(len(inband_spectra), 1)
+        corr = float(C[iu].mean())
+    return rows, corr
+
+
+def print_per_run(label, folder, low, high):
+    """Print the per-run sanity table for one set."""
+    rows, corr = per_run_stats(folder, low, high)
+    peaks = [r["peak"] for r in rows]
+    print("\n{} — per run (in-band {:.0f}-{:.0f} Hz):".format(label, low, high))
+    for r in rows:
+        print("  {:11s} peak={:7.1f} Hz  SNR={:4.1f} dB  decay(head/tail)={:4.2f}"
+              .format(r["name"], r["peak"], r["snr_db"], r["decay"]))
+    print("  peak spread {:.1f} Hz; mean run-to-run spectral corr {:.2f}"
+          .format(float(np.std(peaks)), corr))
+    print("  (decay ~1 in every run = steady line, not a decaying FID; a real "
+          "signal shows decay>>1 and a stable peak)")
 
 
 def load_filtered(folder, low, high):
@@ -184,6 +265,10 @@ def main(argv=None):
         os.path.basename(os.path.normpath(args.signal_dir)),
         os.path.basename(os.path.normpath(args.reference_dir)))
     out_dir = args.out_dir or "."
+
+    if args.per_run:
+        print_per_run(sig_label, args.signal_dir, args.low_freq, args.high_freq)
+        print_per_run(ref_label, args.reference_dir, args.low_freq, args.high_freq)
 
     sig_runs = load_filtered(args.signal_dir, args.low_freq, args.high_freq)
     ref_runs = load_filtered(args.reference_dir, args.low_freq, args.high_freq)
