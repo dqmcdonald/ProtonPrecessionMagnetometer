@@ -1143,6 +1143,35 @@ quiet** (a read returns nothing) before flushing, so trailing self-test output
 no longer pollutes the first command. Regression test added (`Memory check`
 lines after the banner). Doesn't change today's conclusion (runs 1–5 agree).
 
+#### Follow-up 2026-06-25 (later) — SAMPLE WATER IS "OXYGEN ENHANCED" (paramagnetic — bad)
+
+Realised the "distilled water" sample is **"oxygen enhanced"** bottled water
+(puredew.co.nz) — i.e. deliberately supersaturated with O₂. **Dissolved O₂ is
+paramagnetic**, which shortens the proton relaxation times:
+- **T1** (polarisation) shorter — mildly *helpful* (saturates faster; air-sat
+  water T1 ≈ 2.3 s vs ~3.6 s degassed; supersaturated could be < 1 s).
+- **T2 / T2\*** (FID decay & line width) shorter — *harmful*: faster decay, broader
+  line, signal energy spread over more FFT bins → lower peak. PPMs specifically
+  want **degassed** water for a long, narrow FID.
+
+It does **not** reduce signal amplitude (Curie M₀ is unaffected), so it is *not*
+the sole cause of the null — orientation and mains are bigger and confirmed. But
+it attacks the one quantity that decides whether any FID survives to the ADC:
+the signal only outlives the `DELAY` (100 ms) if T2\* > delay. On basalt, T2\* is
+*already* short from field gradients (~100–300 ms); stacking paramagnetic O₂ on
+top can push the combined T2\* below the delay, so the FID decays away before
+sampling — which would look **exactly like the flat, no-decay records seen all
+along.** A plausible *contributor* to the null, and free to remove.
+
+**Action:** switch to **plain distilled water** (auto-parts / supermarket, NOT
+oxygen-enhanced), **degas it** (boil ~10–15 min, cool in a sealed completely-full
+container), and **fill the sample bottle to the brim, no air gap** (stops
+re-oxygenation, kills bubble dead-volume). **Test when dry:** oxygen-enhanced vs
+freshly-degassed back-to-back at the same orientation (look for a decaying head
+only with degassed via `compare_runs.py --per-run`), and try a very short
+`DELAY` (≤ 50 ms) to catch a fast-decaying FID. Stacks with the mains fix and the
+filling-factor note (2026-06-13).
+
 ---
 
 ## Quick reference — key specs from the book
