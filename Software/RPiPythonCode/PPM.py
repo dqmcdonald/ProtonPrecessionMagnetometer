@@ -72,6 +72,16 @@ DATA_MARKER = b"PPMD"
 BAUD_RATE = 250000
 DEFAULT_PORT = '/dev/serial0'  # Raspberry Pi hardware UART; override with --port.
 
+# Opening the serial port toggles DTR, which resets most Arduino boards (and any
+# USB-serial adapter that drives DTR/RTS).  The firmware then boots for ~1-2 s
+# and prints a banner before it accepts commands.  PPMRun.__init__ waits for a
+# line containing READY_BANNER, up to READY_TIMEOUT_S, before sending anything —
+# otherwise the first run's configuration is uploaded into a still-booting board
+# and silently lost.  Matched as a substring so minor banner wording changes do
+# not break the handshake.
+READY_BANNER = "Coil Controller"
+READY_TIMEOUT_S = 5.0
+
 # USB vendor IDs that identify an Arduino or the USB-serial bridge chips
 # commonly found on Arduino boards and programming adapters.  A Pro Mini has
 # no USB hardware of its own, so it enumerates as its programming adapter —
@@ -245,13 +255,14 @@ class PPMRun:
 
         Note: The serial port is opened immediately.  If the port does not
         exist (e.g. on a development PC without the Arduino connected) this
-        will raise serial.SerialException.  The port buffers are flushed on
-        open to discard any stale data from a previous run.
+        will raise serial.SerialException.  Opening the port resets the Arduino,
+        so the constructor then waits for the firmware's boot banner (up to
+        READY_TIMEOUT_S) before returning, ensuring the board is ready to accept
+        the first command.
         """
         self._ser = serial.Serial(port, BAUD_RATE, timeout=1)
-        # Flush both buffers in case there is leftover data from a previous
-        # session or a crashed run.
-        self._ser.reset_input_buffer()
+        # Discard anything still queued on our transmit side; the receive side
+        # (the Arduino's boot output) is consumed by _wait_for_ready() below.
         self._ser.reset_output_buffer()
 
         self._logger = lg
@@ -266,6 +277,13 @@ class PPMRun:
         self._on_time   = ON_TIME_DEFAULT
         self._delay     = DELAY_DEFAULT
         self._cool_down = COOL_DOWN_DEFAULT
+
+        # Opening the port toggled DTR and reset the board; wait for it to boot
+        # before any command is sent.  Skipping this is what made the first run
+        # of a session upload its settings into a still-booting Arduino — the
+        # acknowledgements came back empty and the banner appeared mid-stream as
+        # a bogus reply to a later command.
+        self._wait_for_ready(READY_TIMEOUT_S)
 
     # ── Configuration ─────────────────────────────────────────────────────────
 
@@ -323,6 +341,38 @@ class PPMRun:
         """Write msg to the logger if one was provided."""
         if self._logger:
             self._logger.info(msg)
+
+    def _wait_for_ready(self, timeout_s):
+        """Block until the Arduino's boot banner arrives, then clear the buffer.
+
+        Opening the serial port toggles DTR and resets the board; it boots for
+        ~1-2 s and prints a banner containing READY_BANNER before it will accept
+        commands.  This reads and discards the boot output until that banner is
+        seen, then flushes the input buffer so the first real command receives a
+        clean acknowledgement.
+
+        Each readline() blocks up to the port's 1 s timeout, so the loop polls
+        roughly once a second until the banner appears or the deadline passes.
+
+        A timeout is deliberately non-fatal: some boards do not auto-reset, or
+        the banner may have already been emitted before the port was opened.  In
+        that case the method logs a note and proceeds — the worst case is the
+        old behaviour (a possibly-missed first command), never a hard failure.
+
+        Args:
+            timeout_s: Overall deadline in seconds for the banner to appear.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            line = self._ser.readline().decode('utf-8', errors='replace').strip()
+            if line and READY_BANNER in line:
+                self.log("Controller ready: '{}'".format(line))
+                self._ser.reset_input_buffer()
+                return
+        self.log("Controller boot banner not seen within {:.0f} s; proceeding "
+                 "(first command may be missed if the board is still "
+                 "booting)".format(timeout_s))
+        self._ser.reset_input_buffer()
 
     def send(self, text):
         """Send a single ASCII command and read back the Arduino's acknowledgement.

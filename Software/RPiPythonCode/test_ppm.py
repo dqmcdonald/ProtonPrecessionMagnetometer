@@ -24,7 +24,11 @@ import PPM  # noqa: E402 — must come after the stub
 def make_ppm(on_time=6000, sample_time=1500, sample_rate=16000,
              delay=500, cool_down=10000):
     """Return a PPMRun with the serial constructor stubbed out."""
-    with patch.object(PPM.serial, 'Serial', return_value=MagicMock()):
+    with patch.object(PPM.serial, 'Serial') as mock_serial:
+        # __init__ waits for the boot banner via readline(); hand it back so the
+        # constructor returns immediately instead of polling until the timeout.
+        mock_serial.return_value.readline.return_value = (
+            b"Proton Precession Magnetometer - Coil Controller\n")
         ppm = PPM.PPMRun()
     ppm._ser = MagicMock()
     ppm.configure(on_time=on_time, sample_time=sample_time,
@@ -99,6 +103,32 @@ class TestFindArduinoPort(unittest.TestCase):
     def test_nothing_found_raises(self):
         with self.assertRaises(IOError):
             self._detect([], serial0_exists=False)
+
+
+class TestWaitForReady(unittest.TestCase):
+    """The boot-banner handshake that prevents lost first-run settings."""
+
+    BANNER = b"Proton Precession Magnetometer - Coil Controller\n"
+
+    def test_returns_on_banner_and_flushes(self):
+        ppm = make_ppm()
+        ppm._ser.readline.return_value = self.BANNER
+        ppm._wait_for_ready(2.0)
+        ppm._ser.reset_input_buffer.assert_called_once()
+
+    def test_skips_boot_noise_until_banner(self):
+        ppm = make_ppm()
+        # Empty reads (still booting) then the banner.
+        ppm._ser.readline.side_effect = [b"", b"", self.BANNER]
+        ppm._wait_for_ready(2.0)
+        self.assertEqual(ppm._ser.readline.call_count, 3)
+        ppm._ser.reset_input_buffer.assert_called_once()
+
+    def test_timeout_is_not_fatal_and_still_flushes(self):
+        ppm = make_ppm()
+        ppm._ser.readline.return_value = b""   # banner never arrives
+        ppm._wait_for_ready(0.05)              # short deadline keeps the test fast
+        ppm._ser.reset_input_buffer.assert_called_once()
 
 
 class TestConfigure(unittest.TestCase):

@@ -1038,6 +1038,31 @@ sample and decays**, wherever it lands. Pinning the local field to better than
 ~±1000 nT needs an independent reference (or a working FID to report it) — the
 model value isn't trustworthy on basalt.
 
+#### Follow-up 2026-06-24 (later) — Arduino boot-handshake bug found & fixed
+
+Noticed in the logs that the controller did **not acknowledge the settings for
+the first run** of each session: `Sending command: 'ONTIM 6000'` →
+`Received response: ''` (empty) for the first 4–5 commands, with the boot banner
+`'Proton Precession Magnetometer - Coil Controller'` appearing mid-stream as a
+bogus reply to `COOLD`. Cause: **opening the serial port toggles DTR and resets
+the Arduino**, which then boots ~1–2 s before it listens; the host was firing the
+config commands into a still-booting board. Only run 1 is affected (one port-open
+per session); runs 2+ ack normally (`OK ONTIM: 6000` …).
+
+**Data-quality implication:** `run_00` of each 2026-06-24 multi-run session
+probably executed with the Arduino's **power-on default timing, not the logged
+values** — in particular the SAMPLED150 / WIDE sessions' `run_00` may have used
+the firmware default `DELAY`, not 150 ms. Treat `run_00` of those sessions as
+suspect (drop it, or re-run). Doesn't change the no-FID conclusion (runs 2+ are
+valid and tell the same story), but worth knowing.
+
+**Fix (committed):** `PPM.PPMRun.__init__` now waits for the boot banner
+(`READY_BANNER` = "Coil Controller", up to `READY_TIMEOUT_S` = 5 s) before
+sending anything, via a new `_wait_for_ready()`; flushes the input buffer once
+the banner is seen so the first real command gets a clean ack. Timeout is
+non-fatal (boards that don't auto-reset just proceed). The log now shows a
+`Controller ready: '…'` line at the start of each session. Tests added.
+
 ---
 
 ## Quick reference — key specs from the book
