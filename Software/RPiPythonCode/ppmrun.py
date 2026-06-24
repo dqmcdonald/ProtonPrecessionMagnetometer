@@ -27,6 +27,24 @@ Re-analyse with an existing no-sample recording as background::
 
     python ppmrun.py --input data/ppm1.dat --background-input data/nosample.dat
 
+Settings from an INI file (command line still overrides)::
+
+    python ppmrun.py                       # reads ./ppm.ini if present
+    python ppmrun.py --config site.ini     # use a named file
+    python ppmrun.py --config site.ini --delay 100   # --delay overrides the file
+
+The file holds a ``[ppm]`` section of long-option names (dashes or underscores)::
+
+    [ppm]
+    tag = field_test
+    delay = 150
+    low-freq = 2200
+    high-freq = 2600
+    runs = 6
+
+Precedence is command line > config file > built-in default, and the log file
+records the effective value and source for every setting.  See ppm.ini.example.
+
 Background subtraction
 ----------------------
 Background acquisitions sample with the coil never energised, recording only
@@ -54,6 +72,7 @@ so that multiple runs do not overwrite each other.
 """
 
 import argparse
+import configparser
 import logging
 import os
 import sys
@@ -75,6 +94,17 @@ def build_parser():
     """Build and return the command-line argument parser."""
     p = argparse.ArgumentParser(
         description="Proton Precession Magnetometer data collection and analysis")
+
+    # ── Configuration file ────────────────────────────────────────────────────
+    p.add_argument("--config", default="ppm.ini", metavar="FILE",
+                   help="INI file of settings, read from the [ppm] section.  "
+                        "Any value here overrides the built-in default; a "
+                        "command-line option overrides both.  Keys are the long "
+                        "option names with or without the leading dashes "
+                        "(e.g. 'delay = 150', 'low-freq = 2200').  If the "
+                        "default file (ppm.ini) is absent it is silently "
+                        "skipped; an explicitly named --config that is missing "
+                        "is an error (default: ppm.ini)")
 
     # ── Serial port ───────────────────────────────────────────────────────────
     p.add_argument("--port", default=None, metavar="DEV",
@@ -176,6 +206,196 @@ def build_parser():
                         "run directory name (<tag>_<timestamp>)")
 
     return p
+
+
+# Settings that are operational modes / file-location metadata rather than run
+# parameters; they are never taken from the INI file and are not listed in the
+# logged settings summary.
+_NON_CONFIG_DESTS = frozenset({"help", "config", "list_ports"})
+
+
+def _str_to_bool(raw):
+    """Parse an INI string into a bool, accepting the usual truthy spellings."""
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    raise ValueError("expected a boolean (true/false), got {!r}".format(raw))
+
+
+def _convert_ini_value(action, raw):
+    """Convert an INI string to the type the argparse action expects.
+
+    store_true/store_false flags become booleans; everything else is run
+    through the action's declared ``type`` (int/float), or left as a string.
+    """
+    if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+        return _str_to_bool(raw)
+    if action.type is not None:
+        return action.type(raw)
+    return raw
+
+
+def load_config_file(path, parser, required):
+    """Read settings from the [ppm] section of an INI file.
+
+    Keys are matched to argparse destinations after replacing '-' with '_', so
+    both 'low-freq' and 'low_freq' work.  Values are type-converted to match
+    the corresponding option.  Unknown keys produce a warning and are ignored;
+    a malformed file or a bad value is a fatal error (better to stop than to
+    silently run with the wrong timing).
+
+    Args:
+        path:     Path to the INI file (may be None).
+        parser:   The argparse parser, used for action types and valid dests.
+        required: If True, a missing file is a fatal error; if False (the
+                  default config path), a missing file is silently skipped.
+
+    Returns:
+        (settings, used_path) where settings maps argparse dest → converted
+        value for every recognised key, and used_path is the file actually read
+        (or None if no file was read).
+    """
+    if not path or not os.path.exists(path):
+        if required:
+            print("Error: config file not found: {}".format(path),
+                  file=sys.stderr)
+            sys.exit(1)
+        return {}, None
+
+    cp = configparser.ConfigParser()
+    try:
+        cp.read(path)
+    except configparser.Error as e:
+        print("Error parsing config file {}: {}".format(path, e),
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Prefer an explicit [ppm] section; fall back to the DEFAULT section so a
+    # bare key=value file (no section header is still required by configparser,
+    # but DEFAULT works) is tolerated.
+    raw = dict(cp.items("ppm")) if cp.has_section("ppm") else dict(cp.defaults())
+
+    actions_by_dest = {a.dest: a for a in parser._actions}
+    settings = {}
+    for key, value in raw.items():
+        dest = key.replace("-", "_")
+        if dest in _NON_CONFIG_DESTS or dest not in actions_by_dest:
+            print("Warning: ignoring unknown config key {!r} in {}".format(
+                key, path), file=sys.stderr)
+            continue
+        try:
+            settings[dest] = _convert_ini_value(actions_by_dest[dest], value)
+        except (ValueError, TypeError) as e:
+            print("Error: bad value for {!r} in {}: {}".format(key, path, e),
+                  file=sys.stderr)
+            sys.exit(1)
+    return settings, path
+
+
+def resolve_settings(parser, argv=None):
+    """Merge command-line options, an INI file, and built-in defaults.
+
+    Precedence, highest first: command-line option → config file → default.
+    The provenance of every setting is tracked so it can be logged.
+
+    Detection of which options were given on the command line uses a second
+    parser whose defaults are all argparse.SUPPRESS: options the user did not
+    type are simply absent from its namespace, so only explicit command-line
+    values remain (this distinguishes "user typed --delay 500" from "delay
+    defaulted to 500", which comparing against the default value cannot).
+
+    Args:
+        parser: The fully-built argparse parser from build_parser().
+        argv:   Argument list to parse (default: sys.argv[1:]).
+
+    Returns:
+        (namespace, provenance, used_config_path) where namespace is an
+        argparse.Namespace of resolved values, provenance maps each dest to a
+        human-readable source string, and used_config_path is the INI file read
+        (or None).
+    """
+    # Authoritative parse: applies type conversion, choices, and error/--help
+    # handling with the real defaults visible to the user.
+    parser.parse_args(argv)
+
+    # Second parse with suppressed defaults to find the explicit command-line
+    # options (absent attribute ⇒ not supplied).
+    sup = build_parser()
+    for action in sup._actions:
+        if action.dest != "help":
+            action.default = argparse.SUPPRESS
+    cli_explicit = vars(sup.parse_args(argv))
+
+    # The config path itself follows command-line → default (it cannot name
+    # itself from inside the file).
+    config_required = "config" in cli_explicit
+    config_path = cli_explicit.get("config", parser.get_default("config"))
+    ini_settings, used_path = load_config_file(config_path, parser,
+                                               config_required)
+
+    values, provenance = {}, {}
+    for action in parser._actions:
+        dest = action.dest
+        if dest == "help":
+            continue
+        if dest == "config":
+            values[dest] = config_path
+            provenance[dest] = ("command line" if "config" in cli_explicit
+                                else "default")
+            continue
+        if dest in cli_explicit:
+            values[dest] = cli_explicit[dest]
+            provenance[dest] = "command line"
+        elif dest in ini_settings:
+            values[dest] = ini_settings[dest]
+            provenance[dest] = "config file ({})".format(used_path)
+        else:
+            values[dest] = parser.get_default(dest)
+            provenance[dest] = "default"
+
+    return argparse.Namespace(**values), provenance, used_path
+
+
+def log_settings(logger, parser, args, provenance, used_config_path,
+                 verbose=False):
+    """Write the effective settings and their sources to the log (and stdout).
+
+    Produces a block like::
+
+        Configuration file: ppm.ini
+        Effective settings (source in brackets):
+          --delay          150            [config file (ppm.ini)]
+          --low-freq       2200.0         [command line]
+          --on-time        6000           [default]
+
+    so a log read months later shows exactly what ran and where each value came
+    from — the operational-mode flags (--config, --list-ports) are omitted.
+
+    Args:
+        logger:           Logger to write to.
+        parser:           The argparse parser (for option names and order).
+        args:             Resolved namespace from resolve_settings().
+        provenance:       dest → source-string map from resolve_settings().
+        used_config_path: INI file actually read, or None.
+        verbose:          If True, also echo the block to stdout.
+    """
+    header = "Configuration file: {}".format(used_config_path or "none")
+    logger.info(header)
+    logger.info("Effective settings (source in brackets):")
+    vprint(header, verbose)
+    vprint("Effective settings (source in brackets):", verbose)
+    for action in parser._actions:
+        dest = action.dest
+        if dest in _NON_CONFIG_DESTS:
+            continue
+        name = max(action.option_strings, key=len) if action.option_strings \
+            else dest
+        line = "  {:<16} {:<14} [{}]".format(
+            name, str(getattr(args, dest)), provenance.get(dest, "default"))
+        logger.info(line)
+        vprint(line, verbose)
 
 
 def setup_run_dir(base_dir, tag="PPM"):
@@ -684,7 +904,7 @@ def report_peaks(peaks, logger, snr=None):
 def main():
     """Parse arguments, set up the run directory, and execute the pipeline."""
     parser = build_parser()
-    args = parser.parse_args()
+    args, provenance, used_config_path = resolve_settings(parser)
 
     # --list-ports: scan and print available serial ports, then exit.
     if args.list_ports:
@@ -723,6 +943,8 @@ def main():
     logger.info("Beginning PPM Run")
     logger.info("Output directory: {}".format(run_dir))
     vprint("Output directory: {}".format(run_dir), args.verbose)
+    log_settings(logger, parser, args, provenance, used_config_path,
+                 verbose=args.verbose)
 
     if args.input:
         logger.info("Reanalysis mode: loading {}".format(args.input))

@@ -1,0 +1,38 @@
+# Example ppm.ini for ppmrun.py
+#
+# Copy this to "ppm.ini" (the default config path) or pass it with
+#   python ppmrun.py --config ppm.ini.example
+#
+# Every key is a long command-line option name, with or without the leading
+# dashes ("low-freq" and "low_freq" both work).  Precedence is:
+#   command-line option  >  this file  >  built-in default
+# The log file (ppm.log) records the effective value and source of each setting.
+#
+# Anything you leave out keeps its built-in default, so a real file usually only
+# lists the few settings you actually change from run to run.
+
+[ppm]
+# Output naming
+tag = field_test
+
+# Hardware timing (ms, except sample-rate in Hz)
+on-time     = 6000
+sample-time = 1500
+sample-rate = 16000
+delay       = 150
+cool-down   = 10000
+
+# Multi-run averaging and background subtraction
+runs            = 6
+background-runs = 0
+
+# Analysis band — set wide around the (uncertain) local Larmor frequency.
+# Search wide and let the real peak reveal itself rather than tuning to a number.
+low-freq      = 2200
+high-freq     = 2600
+fft-threshold = 0.0005
+
+# Output control
+output-dir = data
+# verbose  = true
+# no-plots = false

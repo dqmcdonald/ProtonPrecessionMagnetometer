@@ -100,6 +100,72 @@ class TestArgumentParser(unittest.TestCase):
         self.assertEqual(args.cool_down, 5000)
 
 
+class TestConfigFileResolution(unittest.TestCase):
+    """Settings precedence: command line > config file > built-in default."""
+
+    def _write_ini(self, body):
+        fd, path = tempfile.mkstemp(suffix=".ini")
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def resolve(self, argv):
+        return ppmrun.resolve_settings(ppmrun.build_parser(), argv)
+
+    def test_missing_default_config_is_silently_skipped(self):
+        # The default ppm.ini almost certainly does not exist in the test cwd;
+        # resolution should fall back to built-in defaults without error.
+        args, prov, used = self.resolve([])
+        self.assertEqual(args.delay, 500)
+        self.assertEqual(prov["delay"], "default")
+        self.assertIsNone(used)
+
+    def test_config_value_overrides_default(self):
+        path = self._write_ini("[ppm]\ndelay = 150\nlow-freq = 2200\n")
+        args, prov, used = self.resolve(["--config", path])
+        self.assertEqual(args.delay, 150)
+        self.assertEqual(args.low_freq, 2200.0)
+        self.assertEqual(used, path)
+        self.assertIn("config file", prov["delay"])
+
+    def test_command_line_overrides_config(self):
+        path = self._write_ini("[ppm]\ndelay = 150\n")
+        args, prov, _ = self.resolve(["--config", path, "--delay", "100"])
+        self.assertEqual(args.delay, 100)
+        self.assertEqual(prov["delay"], "command line")
+
+    def test_underscore_and_dash_keys_both_work(self):
+        path = self._write_ini("[ppm]\nlow_freq = 2100\nhigh-freq = 2700\n")
+        args, _, _ = self.resolve(["--config", path])
+        self.assertEqual(args.low_freq, 2100.0)
+        self.assertEqual(args.high_freq, 2700.0)
+
+    def test_boolean_flag_from_config(self):
+        path = self._write_ini("[ppm]\nno-plots = true\nverbose = false\n")
+        args, prov, _ = self.resolve(["--config", path])
+        self.assertTrue(args.no_plots)
+        self.assertFalse(args.verbose)
+        self.assertIn("config file", prov["no_plots"])
+
+    def test_explicit_missing_config_is_fatal(self):
+        with self.assertRaises(SystemExit):
+            self.resolve(["--config", "/no/such/file.ini"])
+
+    def test_unknown_key_warns_but_continues(self):
+        path = self._write_ini("[ppm]\nbogus = 5\ndelay = 150\n")
+        with patch("sys.stderr", new_callable=io.StringIO) as err:
+            args, _, _ = self.resolve(["--config", path])
+        self.assertEqual(args.delay, 150)
+        self.assertIn("bogus", err.getvalue())
+
+    def test_bad_value_is_fatal(self):
+        path = self._write_ini("[ppm]\ndelay = not_a_number\n")
+        with patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit):
+                self.resolve(["--config", path])
+
+
 class TestSetupRunDir(unittest.TestCase):
 
     def test_creates_directory(self):

@@ -10,3 +10,4 @@ debug/*
 !debug/*.md
 Software/RPiPythonCode/data/
 Software/RPiPythonCode/old_data/
+Software/RPiPythonCode/ppm.ini
