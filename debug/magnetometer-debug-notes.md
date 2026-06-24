@@ -39,19 +39,50 @@ with/without sample" symptom. After the non-adiabatic quench the magnetization
 points along the old polarizing axis; only its component transverse to Earth's
 field precesses, so an axis near parallel to the field detects nothing.
 
+**⚠ GEOMETRY TRAP — "tilt to 68°" may be aligning the axis ALONG the field
+(zero signal).** The rule is *axis ⊥ field*. The field points magnetic-north and
+dips ~68.5° below horizontal, so the field *line* runs S-and-up at 68.5°. Pointing
+the coil **south, tilted up ~68.5°** lays the axis right along that line →
+antiparallel to B → sin²θ ≈ 0 → **no precession**, with perfect electronics. The
+correct meridian-plane tilt is the *complement*: axis at **(90° − I) ≈ 21.5° from
+horizontal** (= 68.5° from vertical), NOT 68.5° from horizontal. "Tilt to the
+inclination" is the classic mis-statement that flips exactly this — check whether
+the rig's 68° was measured from horizontal or vertical.
+
+**FOOLPROOF FIX — point the axis horizontal, magnetic EAST–WEST.** The field lies
+in the N–S vertical (meridian) plane, so it has **zero E–W component**; therefore
+*any horizontal axis pointing magnetic E–W is automatically ⊥ to the field*
+(θ = 90°, the optimum) **regardless of the inclination**. Set the coil axis
+horizontal, perpendicular to the compass needle. No inclination number needed,
+and immune to the basalt anomaly in the *dip*. **Try this first.**
+
 **Basalt twist — do NOT trust the 68°35′ model inclination.** That angle is from
 the IGRF *model*; the 2380 Hz line already shows the local field is offset
 ~1000+ nT from the model (basalt crustal anomaly), and a crustal anomaly tilts
 the field *direction* too, not just its magnitude. **Find the right tilt by
-experiment, not calculation.**
+experiment, not calculation** — and cross-check the local dip independently:
+- **Dip needle / dip circle** — magnetised needle on a *horizontal* pivot swinging
+  in the meridian plane settles at the true local inclination (anomaly included).
+  Cheap to build (needle + low-friction axle + protractor). The classic
+  independent inclination measurement.
+- **Smartphone 3-axis magnetometer app** — reads the field vector incl. dip;
+  crude (±few µT, needs figure-8 calibration, keep away from metal) but free and
+  genuinely independent; enough to flag a gross anomaly.
+- On basalt the rock can deflect the **compass itself** — check magnetic north
+  from two spots a few metres apart; if the needle swings, lean on the on-rig
+  max-signal sweep, not a single compass reading.
+- (Declination needs an independent *true* north — shadow at solar noon, Polaris,
+  or a GPS-tracked straight line — but the rig doesn't need it; the compass needle
+  already gives the local horizontal field direction the E–W trick uses.)
 
 How:
-1. Take a `sample` + matched `no-sample` pair at a grid of platform tilts around
-   the expected perpendicular (≈ ±30° in ~10–15° steps; add a couple of azimuths
-   if the platform allows).
-2. At each, run `Software/RPiPythonCode/compare_runs.py` and **search WIDE in
-   frequency (~2200–2600 Hz)** — hunt for the one peak that is *both*
-   sample-dependent *and* decaying, wherever it lands.
+1. Start from the **E–W horizontal** axis above. Then take a `sample` + matched
+   `no-sample` pair at a grid of tilts around it (≈ ±30° in ~10–15° steps; add a
+   couple of azimuths if the platform allows) to map the response.
+2. At each, run `Software/RPiPythonCode/compare_runs.py --per-run` and **search
+   WIDE in frequency (~2200–2600 Hz)** — hunt for the one peak that is *both*
+   sample-dependent *and* decaying (per-run decay ≫ 1 at a stable freq), wherever
+   it lands.
 3. The orientation where that decaying, sample-only peak emerges/maximizes is the
    answer — and it simultaneously gives you the true local field *direction*
    (worth having, since the model value is untrustworthy on basalt).
