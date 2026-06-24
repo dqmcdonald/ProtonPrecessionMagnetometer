@@ -809,7 +809,7 @@ trading a slightly slower (still fast enough) edge for a shorter tail.
 
 ---
 
-### Follow-up 2026-06-24: FIRST TUNED SAMPLE vs NO-SAMPLE RUNS — STILL NO FID; TANK IS MISTUNED ~55 Hz LOW
+### Follow-up 2026-06-24: FIRST TUNED SAMPLE vs NO-SAMPLE RUNS — STILL NO FID; DOMINANT LINE IS THE TANK (true Larmor uncertain on basalt — see same-day addendum below, which walks back the "mistuned, retune to 2435" framing)
 
 First sample/no-sample comparison with the **full chain in place** (book amp +
 SW1 tank tuned + real polarise-sample cycles, no signal injection). Runs in
@@ -883,6 +883,60 @@ microphonic (6/21) that drives the resonance, and confirm polarising-coil tilt
 vs the 68°35′ inclination. If a retuned, lower-noise tank *still* shows no
 sample-dependent decaying head, the gap is source coupling (filling factor /
 T2\*), not detection.
+
+#### Addendum 2026-06-24 (same session) — two corrections after thinking it through
+
+Prompted by two good questions from the user; both refine the entry above.
+
+**(1) "How long does the ringing last? Is it weaker with a longer DELAY?"**
+Measured in **raw ADC counts** (DC-removed only — *not* PPMCalc's per-record
+range normalisation, which would erase absolute-amplitude differences between
+runs). In-band (2300–3300 Hz) RMS:
+
+| Run | DELAY | mean in-band RMS (counts) | per-run spread |
+|---|---|---|---|
+| SAMPLE | 500 ms | 1645 | 1621–1676 |
+| SAMPLED150 | 150 ms | 1688 | 1669–1709 |
+| SAMPLED150 ×6 | 150 ms | 1678 | 1621–1755 |
+
+The 500 ms run is only ~2.6 % below the 150 ms run — **less than the ±4 %
+run-to-run scatter** — so it is **not** meaningfully weaker. Within each record,
+first-150 ms vs last-150 ms ratio ≈ 1.02 (DELAY 500) and 0.97 (DELAY 150) =
+flat. A decaying component (FID or long ring-down) with τ of a few hundred ms
+would show a clear drop when sampling starts 350 ms later, and head > tail;
+neither happens → the in-band energy is a **steady, continuously re-driven
+resonance**, not a ring-down. The *quench-excited* tank ring-down decays with
+τ = Q/(πf) ≈ 0.7–2.4 ms (Q≈5–18 at ~2400 Hz) — gone within ~10 ms, long before
+sampling starts at either delay (consistent with the 6/23 captures settling in
+~150–200 µs). So the only "ringing" still present at 150–2000 ms is the steady
+noise-driven line.
+
+**(2) "2435 Hz is only the *likely* signal location — the field changes daily and
+I'm on a basalt volcanic peninsula."** Correct, and it walks back two over-claims
+in the entry above:
+- **2435 Hz is the IGRF *model* value (57198 nT) and does not include the local
+  crustal anomaly.** On basalt/volcanic terrain, static anomalies of ±hundreds-
+  to-thousands of nT are normal; diurnal (Sq) variation adds a few nT / few Hz,
+  more in a storm. So the true local Larmor could plausibly sit anywhere
+  ~2300–2500 Hz. The observed 2380 Hz line = **55.74 µT**, only ~1450 nT below
+  the model — entirely consistent with a basalt anomaly. (There is also a
+  ~2450 Hz line = the **49th harmonic of 50 Hz mains**, the one the code warns
+  about — so "the peak" is at least two interferers, not one clean feature.)
+- **Therefore the "tank is mistuned ~55 Hz low → retune to 2435 Hz" advice was
+  premature.** If the field really is ~55.8 µT, then 2380 Hz *is* Larmor and the
+  tank may already be on target — retuning to 2435 would move *away* from the
+  signal. And the tank is low-Q (~5, BW ≈ 500 Hz), so it already spans
+  ~2200–2650 Hz; exact tuning isn't critical for first detection.
+- **The "wrong frequency" item in the three-proofs list is the weak one** and
+  should not be leaned on. The two field-independent proofs — no-sample matches
+  sample, and no envelope decay — are what actually rule out a proton signal
+  here, and they hold regardless of the basalt offset.
+
+**Revised next step:** don't chase a number. **Search wide (~2200–2600 Hz) and
+let the real Larmor reveal itself as the one peak that both appears only with the
+sample and decays**, wherever it lands. Pinning the local field to better than
+~±1000 nT needs an independent reference (or a working FID to report it) — the
+model value isn't trustworthy on basalt.
 
 ---
 
