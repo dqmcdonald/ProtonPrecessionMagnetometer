@@ -1088,6 +1088,21 @@ zero-phase ±15 Hz) finds **no frequency where the sample set decays more than
 no-sample** — ratios scatter ~1.0 everywhere in both sets. `compare_runs.py
 --per-run` confirms flat decay (0.83–1.14) at the dominant lines.
 
+**Two extra controls (also noise):** `SAMPLE_REV_E-W_…10_47_05` (polarising-coil
+terminals reversed) and `SAMPLE_REV2_E-W_…10_52_19` (sample in the *other*
+sensor coil). Both peak at ~2350 Hz like the no-sample baseline, and the
+band-wide decay scan (2320–2480 Hz) flags **no sample-only decaying feature** in
+either. Caveat on why these are weak *presence* tests: a real FID's **power
+spectrum is invariant** under both — reversing B_p flips the FID's initial phase
+180° (same magnitude/frequency), and moving the sample to the opposed gradiometer
+coil flips its sign (again phase-only). So they can't reveal a signal the FFT
+magnitude already misses; they're **wiring/artifact sanity checks**, and they
+pass (response independent of polarity and of which coil → rules out a
+sample-detuning-one-coil artifact). The real discriminator stays decay +
+sample-dependence, still negative. (Bonus: these are the first runs with the
+two-phase handshake fix — `Controller ready (boot output drained)` in both logs,
+so their `run_00` used correct settings.)
+
 **The rig is now MAINS-LIMITED.** The averaged spectrum is a clean **50 Hz
 harmonic comb** — sharp lines at 2250/2300/2350/2400/2450/2550 Hz (= 45–51 × 50,
 odd harmonics strongest = transformer/SMPS signature). No-sample is dominated by
