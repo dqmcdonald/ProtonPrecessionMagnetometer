@@ -8,7 +8,17 @@ Generated from a debugging discussion on 2026-06-03.
 
 ---
 
-## ⇒ START HERE — CURRENT STATUS & TOP NEXT STEP (as of 2026-06-24)
+## ⇒ START HERE — CURRENT STATUS & TOP NEXT STEP (as of 2026-06-25)
+
+> **UPDATE 2026-06-25:** the E–W horizontal orientation has now been tried (one
+> point of the sweep). Still no FID — and it revealed the rig is **MAINS-LIMITED**
+> (a 50 Hz harmonic comb dominates, with 2350/2450 Hz lines sitting right where
+> the basalt Larmor likely is). **The immediate top priority is now to REDUCE
+> MAINS PICKUP** (move outdoors/away from the building, battery-power everything,
+> use `--background-runs`), *then* resume the orientation sweep below. See the
+> 2026-06-25 follow-up for detail. The orientation reasoning still stands — E–W
+> was just one angle, and on basalt the true perpendicular may need azimuth/tilt
+> tweaks — but every angle is mains-limited until the interference is tamed.
 
 **The whole signal chain is verified EXCEPT one link.** Everything below has been
 tested and exonerated over this log:
@@ -1062,6 +1072,61 @@ sending anything, via a new `_wait_for_ready()`; flushes the input buffer once
 the banner is seen so the first real command gets a clean ack. Timeout is
 non-fatal (boards that don't auto-reset just proceed). The log now shows a
 `Controller ready: '…'` line at the start of each session. Tests added.
+
+---
+
+### Follow-up 2026-06-25 — FIRST E–W HORIZONTAL RUNS: NO FID, RIG IS MAINS-LIMITED
+
+Acted on the 6/24 orientation advice: coil **horizontal, axis magnetic E–W**
+(automatically ⊥ to the field regardless of inclination). Two matched 6-run
+sets via the new `ppm.ini` (`on-time 6000 / sample-time 2000 / sample-rate
+16000 / delay 100 / cool-down 10000`): `SAMPLE_E-W_2026_06_25_10_25_59` and
+`NOSAMPLE_E-W_2026_06_25_10_31_02`.
+
+**No proton FID.** A band-wide decay scan (2300–2500 Hz, per-run head/tail RMS,
+zero-phase ±15 Hz) finds **no frequency where the sample set decays more than
+no-sample** — ratios scatter ~1.0 everywhere in both sets. `compare_runs.py
+--per-run` confirms flat decay (0.83–1.14) at the dominant lines.
+
+**The rig is now MAINS-LIMITED.** The averaged spectrum is a clean **50 Hz
+harmonic comb** — sharp lines at 2250/2300/2350/2400/2450/2550 Hz (= 45–51 × 50,
+odd harmonics strongest = transformer/SMPS signature). No-sample is dominated by
+the **2350 Hz (47th)** line, sample by **2450 Hz (49th)**: the broad low-Q tank
+amplifies whichever harmonic it sits nearest, and inserting the sample loads the
+coil and nudges the tank from ~2350 to ~2450 (both steady interference, neither
+decays). Per-run SNR rose to 30–38 dB (vs 20–25 on 6/24) — just **sharper
+interference**, not signal. So the E–W orientation changed the pickup as
+expected geometrically but coupled the horizontal loop strongly to building
+mains wiring.
+
+**⚠ Coincidence that raises the stakes:** the likely basalt Larmor (55–57.5 µT)
+is **2349–2449 Hz — right on the 2350/2450 mains harmonics**. If the true Larmor
+lands on a harmonic it is spectrally indistinguishable from mains; **only the
+decay separates them.** So killing the mains AND leaning on decay-based detection
+both matter.
+
+**Revised top priority — reduce mains pickup (ahead of more orientation
+sweeping):**
+1. Get **away from mains**: outdoors, away from the building, wooden/plastic
+   stand (book p.59). The horizontal E–W loop is coupling to wall/floor wiring.
+2. **Battery-power everything**, including the acquisition Pi/laptop, or keep
+   mains gear far away on long leads.
+3. **Contemporaneous background subtraction** — `ppmrun.py --background-runs N`
+   (built for stationary mains harmonics). Imperfect here because the dominant
+   harmonic differs sample vs no-sample, but it knocks down the common comb.
+4. **Then resume the orientation sweep** — E–W is one perpendicular point; on
+   basalt the true perpendicular may need azimuth/tilt tweaks. Sweep *after*
+   taming mains, else every angle is mains-limited.
+
+**Handshake fix refined (the boot bug wasn't fully solved on 6/24).** These logs
+showed the firmware prints a **multi-line memory self-test ("Memory check
+passed: read 42 from address …") AFTER the banner**, so run 1's command acks
+were still offset by that chatter (and could overflow the Arduino's 64-byte RX
+buffer) — `run_00` of these E–W sessions remains suspect. `_wait_for_ready()` is
+now **two-phase**: wait for the banner, then **drain until the serial line is
+quiet** (a read returns nothing) before flushing, so trailing self-test output
+no longer pollutes the first command. Regression test added (`Memory check`
+lines after the banner). Doesn't change today's conclusion (runs 1–5 agree).
 
 ---
 

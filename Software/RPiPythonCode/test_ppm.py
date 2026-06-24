@@ -25,10 +25,12 @@ def make_ppm(on_time=6000, sample_time=1500, sample_rate=16000,
              delay=500, cool_down=10000):
     """Return a PPMRun with the serial constructor stubbed out."""
     with patch.object(PPM.serial, 'Serial') as mock_serial:
-        # __init__ waits for the boot banner via readline(); hand it back so the
-        # constructor returns immediately instead of polling until the timeout.
-        mock_serial.return_value.readline.return_value = (
-            b"Proton Precession Magnetometer - Coil Controller\n")
+        # __init__ waits out the boot output via readline(): the banner, then
+        # an empty read (line quiet) ends the drain.  Feed that so construction
+        # returns immediately instead of polling until the timeout.
+        mock_serial.return_value.readline.side_effect = (
+            [b"Proton Precession Magnetometer - Coil Controller\n"]
+            + [b""] * 5)
         ppm = PPM.PPMRun()
     ppm._ser = MagicMock()
     ppm.configure(on_time=on_time, sample_time=sample_time,
@@ -112,16 +114,31 @@ class TestWaitForReady(unittest.TestCase):
 
     def test_returns_on_banner_and_flushes(self):
         ppm = make_ppm()
-        ppm._ser.readline.return_value = self.BANNER
+        # Banner, then quiet (empty read) ends the drain.
+        ppm._ser.readline.side_effect = [self.BANNER, b""]
         ppm._wait_for_ready(2.0)
         ppm._ser.reset_input_buffer.assert_called_once()
 
     def test_skips_boot_noise_until_banner(self):
         ppm = make_ppm()
-        # Empty reads (still booting) then the banner.
-        ppm._ser.readline.side_effect = [b"", b"", self.BANNER]
+        # Empty reads (still booting) then the banner, then quiet.
+        ppm._ser.readline.side_effect = [b"", b"", self.BANNER, b""]
         ppm._wait_for_ready(2.0)
-        self.assertEqual(ppm._ser.readline.call_count, 3)
+        self.assertEqual(ppm._ser.readline.call_count, 4)
+        ppm._ser.reset_input_buffer.assert_called_once()
+
+    def test_drains_self_test_after_banner(self):
+        # The real firmware prints a multi-line memory self-test after the
+        # banner; it must be drained so it does not become bogus command acks.
+        ppm = make_ppm()
+        ppm._ser.readline.side_effect = [
+            self.BANNER,
+            b"Memory check passed: read 42 from address 11282\n",
+            b"Memory check passed: read 42 from address 34459\n",
+            b"",                       # line finally quiet -> ready
+        ]
+        ppm._wait_for_ready(2.0)
+        self.assertEqual(ppm._ser.readline.call_count, 4)
         ppm._ser.reset_input_buffer.assert_called_once()
 
     def test_timeout_is_not_fatal_and_still_flushes(self):

@@ -343,35 +343,60 @@ class PPMRun:
             self._logger.info(msg)
 
     def _wait_for_ready(self, timeout_s):
-        """Block until the Arduino's boot banner arrives, then clear the buffer.
+        """Wait out the Arduino's boot output, then clear the buffer.
 
-        Opening the serial port toggles DTR and resets the board; it boots for
-        ~1-2 s and prints a banner containing READY_BANNER before it will accept
-        commands.  This reads and discards the boot output until that banner is
-        seen, then flushes the input buffer so the first real command receives a
-        clean acknowledgement.
+        Opening the serial port toggles DTR and resets the board, which then
+        boots for ~1-2 s before it accepts commands.  Boot is in two visible
+        phases: an initial silence, then a burst of output — a banner containing
+        READY_BANNER *followed by* a multi-line power-on self-test
+        ("Memory check passed: ...").  This is handled in two phases to match:
 
-        Each readline() blocks up to the port's 1 s timeout, so the loop polls
-        roughly once a second until the banner appears or the deadline passes.
+        1. Read until the banner appears (ignoring the leading silence — empty
+           reads are the 1 s serial timeout expiring while the board is still
+           booting, not a sign that it is done).
+        2. After the banner, keep draining lines until one read returns nothing,
+           i.e. the line has been quiet for a full timeout — the self-test has
+           finished.  Then flush the input buffer.
+
+        Without phase 2 the trailing self-test lines are read back as bogus
+        acknowledgements to the first run's configuration commands (and may even
+        overflow the Arduino's RX buffer), so the first run's settings are
+        unreliable — exactly the symptom seen before this was added.
 
         A timeout is deliberately non-fatal: some boards do not auto-reset, or
-        the banner may have already been emitted before the port was opened.  In
-        that case the method logs a note and proceeds — the worst case is the
-        old behaviour (a possibly-missed first command), never a hard failure.
+        the banner may have scrolled past before the port was opened.  In that
+        case the method logs a note and proceeds — worst case is the old
+        behaviour (a possibly-missed first command), never a hard failure.
 
         Args:
-            timeout_s: Overall deadline in seconds for the banner to appear.
+            timeout_s: Overall deadline in seconds for the whole handshake.
         """
         deadline = time.monotonic() + timeout_s
+
+        # Phase 1 — wait for the banner (the board may be silent for ~1-2 s
+        # first, so empty reads are expected and ignored here).
+        saw_banner = False
         while time.monotonic() < deadline:
             line = self._ser.readline().decode('utf-8', errors='replace').strip()
             if line and READY_BANNER in line:
-                self.log("Controller ready: '{}'".format(line))
-                self._ser.reset_input_buffer()
-                return
-        self.log("Controller boot banner not seen within {:.0f} s; proceeding "
-                 "(first command may be missed if the board is still "
-                 "booting)".format(timeout_s))
+                self.log("Controller banner: '{}'".format(line))
+                saw_banner = True
+                break
+
+        if not saw_banner:
+            self.log("Controller boot banner not seen within {:.0f} s; "
+                     "proceeding (first command may be missed if the board is "
+                     "still booting)".format(timeout_s))
+            self._ser.reset_input_buffer()
+            return
+
+        # Phase 2 — drain the trailing self-test until the line goes quiet (an
+        # empty read == one full timeout with no new line), so boot chatter does
+        # not pollute the first command's acknowledgement.
+        while time.monotonic() < deadline:
+            if not self._ser.readline():
+                break
+        self.log("Controller ready (boot output drained)")
         self._ser.reset_input_buffer()
 
     def send(self, text):
