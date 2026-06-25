@@ -1196,6 +1196,31 @@ today's are live. To confirm the microphonic is genuinely fixed (not just masked
 or dependent on how the rig is currently clamped), take a **grounded run in the
 present setup** — if 200–260 Hz stays ~230 counts there too, it's truly gone.
 
+#### Option 2026-06-25 — battery instead of the 150 W Meanwell for the coil supply
+
+Considering powering the polarising coil from a **12 V 16 Ah sealed lead-acid
+(AGM) deep-cycle battery** (NOMAD E2 ULTRA: 12 V, 16 Ah, max discharge 180 A/2 s,
+internal R ≈ 17 mΩ, plain T1/T2 spade terminals — *not* a jump starter, no
+electronics). **Verdict: do it.**
+
+- **Capability — trivial.** The ~9.6 A / 6 s pulse barely loads it: sag ≈
+  9.6 A × 0.017 Ω ≈ **0.16 V** (stable current). Energy ≈ 0.016 Ah/pulse →
+  ~0.1 Ah per 6-run session → **hundreds of runs per charge**; pulsed duty never
+  stresses it. A charged SLA rests ~12.7–13 V vs the Meanwell's 12 V, so possibly
+  **a few % more coil current/field** (mild signal bonus).
+- **Noise benefit (real but secondary):** removes the Meanwell **SMPS switching
+  noise** and the **mains-earth ground/conducted path**; floating & mains-free.
+- **Main value = it makes the rig portable/mains-free → enables the relocation**
+  away from the service entry (the actual fix for the comb).
+- **⚠ Will NOT by itself kill the 2350/2450 Hz mains comb** — that is radiated
+  pickup into the *sensor coil* (the 6/21 grounded run showed no in-band comb),
+  fixed by relocation, not by how the coil supply is powered. Complementary, not
+  either/or. (Consistent with the book already battery-powering the *amp*.)
+- **Practical:** wire to the MOSFET bank "12 V In" (J2) via T1/T2; **inline fuse
+  ~15–20 A at the battery +** (it'll dump 180 A into a fault); keep battery and
+  leads **~1 m from the sensor coils and twist the leads**; charge with an
+  SLA/AGM charger (14.4–14.6 V).
+
 ---
 
 ## Quick reference — key specs from the book
