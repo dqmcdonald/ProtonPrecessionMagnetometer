@@ -1172,6 +1172,30 @@ only with degassed via `compare_runs.py --per-run`), and try a very short
 `DELAY` (≤ 50 ms) to catch a fast-decaying FID. Stacks with the mains fix and the
 filling-factor note (2026-06-13).
 
+#### Follow-up 2026-06-25 (later) — 200–260 Hz microphonic ~100× down; noise traded for mains (DIFFERENT LOCATION, near the power-line entry)
+
+Checked whether the 6/21 **200–260 Hz microphonic** (transformer/coil vibration;
+was 70% of grounded-run power, peak ~237 Hz) survives in today's runs. Absolute
+band RMS in 200–260 Hz (counts): today's E–W runs **~228–242**, vs 6/21
+**grounded 22,669** and 6/21 **SIGNAL2440 (coil-connected) 915** → roughly a
+**100× drop** (and ~4× below even the coil-connected 6/21 run). Today's strongest
+low-frequency line is **150 Hz** (3rd mains harmonic), not 237 Hz. So the
+microphonic is no longer a player.
+
+**Why the change — location.** Today's runs were at a **different location,
+closer to where the overhead power lines enter the house.** That explains the
+whole shift: the noise traded from **microphonic-limited (6/21)** to
+**heavily mains-limited (6/25, the 50 Hz harmonic comb)**. Concrete confirmation
+that **position dominates mains pickup** — and a pointer for the fix: the move
+went the *wrong* way (toward the service entry). The "reduce mains" action is now
+specific: **get well away from the power-line entry / overhead drop — ideally
+outdoors, far from the house.**
+
+Caveat: the 6/21 microphonic number is from a *grounded* (input-shorted) run;
+today's are live. To confirm the microphonic is genuinely fixed (not just masked
+or dependent on how the rig is currently clamped), take a **grounded run in the
+present setup** — if 200–260 Hz stays ~230 counts there too, it's truly gone.
+
 ---
 
 ## Quick reference — key specs from the book
