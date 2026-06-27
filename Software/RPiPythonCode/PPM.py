@@ -402,18 +402,25 @@ class PPMRun:
     def send(self, text):
         """Send a single ASCII command and read back the Arduino's acknowledgement.
 
-        The Arduino echoes one line per command.  This acknowledgement is read
-        and logged but its content is not validated — the Arduino is trusted to
-        accept every well-formed command.
+        The Arduino echoes one line per command.  Well-formed commands are
+        acknowledged with a line beginning "OK"; an unrecognised command yields
+        "Unknown command: ..." and a command sent while the board is busy yields
+        "ERR: ...".  The acknowledgement is logged and returned so the caller can
+        validate it where that matters (see doMeasurement).
 
         Args:
             text: The command string to send (without trailing newline).
+
+        Returns:
+            The Arduino's one-line acknowledgement, stripped of whitespace.  An
+            empty string means the serial read timed out before a reply arrived.
         """
         self._ser.write("{}\n".format(text).encode('utf-8'))
         self.log("Sending command:   '{}'".format(text))
         resp = self._ser.readline()
         resp = resp.decode('utf-8').strip()
         self.log("Received response: '{}'".format(resp))
+        return resp
 
     def _read_exact(self, n):
         """Read exactly n bytes from the serial port, blocking until they arrive.
@@ -493,7 +500,7 @@ class PPMRun:
             text = "{} {}".format(command, value)
         else:
             text = command
-        self.send(text)
+        return self.send(text)
 
     # ── Hardware setup ────────────────────────────────────────────────────────
 
@@ -562,7 +569,25 @@ class PPMRun:
             Line 2: actual_sample_rate (integer, Hz)
             Lines 3+: one ADC integer per line
         """
-        self.sendCommand(BACKGROUND_COMMAND if background else EXECUTE_COMMAND)
+        command = BACKGROUND_COMMAND if background else EXECUTE_COMMAND
+        ack = self.sendCommand(command)
+
+        # Validate the acknowledgement before committing to the long wait for a
+        # data frame.  A well-formed command is answered with a line beginning
+        # "OK"; anything else (e.g. "Unknown command: BKGND" from firmware that
+        # predates the background feature, or "ERR: busy") means no frame is
+        # coming.  Failing fast here turns an otherwise baffling marker timeout
+        # several seconds later into an immediate, self-explanatory error.
+        if not ack.startswith("OK"):
+            hint = ""
+            if "Unknown command" in ack:
+                hint = ("  The flashed firmware does not recognise this "
+                        "command and may need reflashing — {} requires a build "
+                        "no older than the one that added background "
+                        "acquisition.".format(command))
+            raise IOError(
+                "Arduino rejected {} (response: '{}').{}".format(
+                    command, ack, hint))
 
         # Start reading immediately instead of sleeping through the hardware
         # cycle.  At 250000 baud the full ~48 KB frame arrives in under 2 s,

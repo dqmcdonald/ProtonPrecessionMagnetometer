@@ -242,6 +242,36 @@ class TestBackgroundMeasurement(unittest.TestCase):
         self.assertEqual(len(ppm.getSignalData()), 10)
         self.assertEqual(ppm.getActualSampleRate(), 16000)
 
+    def test_rejected_command_fails_fast_with_reflash_hint(self):
+        # Firmware that predates the background feature answers BKGND with
+        # "Unknown command: ..." instead of "OK ...".  doMeasurement must raise
+        # immediately rather than waiting out the marker deadline, and the
+        # message should point at reflashing.
+        ppm = make_ppm()
+        attach_serial_frame(ppm, make_data_frame(16000, 10),
+                            ack=b"Unknown command: BKGND\n")
+        with patch.object(ppm, '_sync_to_marker') as sync_spy, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            with self.assertRaises(IOError) as cm:
+                ppm.doMeasurement(output_path="/dev/null", background=True)
+        # Failed before ever waiting for a data marker.
+        sync_spy.assert_not_called()
+        self.assertIn("Unknown command: BKGND", str(cm.exception))
+        self.assertIn("reflash", str(cm.exception).lower())
+
+    def test_busy_command_fails_fast_without_reflash_hint(self):
+        # A non-"OK" reply that is not "Unknown command" (e.g. "ERR: busy")
+        # still fails fast, but without the firmware-version hint.
+        ppm = make_ppm()
+        attach_serial_frame(ppm, make_data_frame(16000, 10), ack=b"ERR: busy\n")
+        with patch.object(ppm, '_sync_to_marker') as sync_spy, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            with self.assertRaises(IOError) as cm:
+                ppm.doMeasurement(output_path="/dev/null", background=False)
+        sync_spy.assert_not_called()
+        self.assertIn("ERR: busy", str(cm.exception))
+        self.assertNotIn("reflash", str(cm.exception).lower())
+
 
 class TestSendConfiguredValues(unittest.TestCase):
 
