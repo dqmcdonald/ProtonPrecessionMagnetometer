@@ -5,6 +5,7 @@ digikey*order.csv
 DataSheets/
 *-backups/
 *.log
+.history/
 magnum1/
 debug/*
 !debug/*.md
