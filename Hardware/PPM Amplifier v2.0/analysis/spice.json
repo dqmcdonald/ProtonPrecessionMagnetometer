@@ -1,0 +1,71 @@
+{
+  "analyzer_type": "spice",
+  "schema_version": "1.3.0",
+  "summary": {
+    "total": 1,
+    "total_findings": 0,
+    "pass": 1,
+    "warn": 0,
+    "fail": 0,
+    "skip": 0,
+    "by_severity": {
+      "error": 0,
+      "warning": 0,
+      "info": 1
+    }
+  },
+  "findings": [],
+  "simulation_results": [
+    {
+      "subcircuit_type": "opamp_circuit",
+      "components": [
+        "U3"
+      ],
+      "configuration": "inverting",
+      "expected": {
+        "gain": -1.0,
+        "gain_dB": 0.0
+      },
+      "simulated": {
+        "gain_dB": -0.0,
+        "gain_linear": 1.0,
+        "bandwidth_hz": 4988150.0,
+        "gain_low_dB": -0.0,
+        "gain_high_dB": -0.0,
+        "gain_spread_dB": 0.0
+      },
+      "delta": {
+        "gain_error_dB": 0.0
+      },
+      "model_note": "ideal opamp (Aol=1e6, GBW~10MHz) \u2014 real part may limit bandwidth",
+      "status": "pass",
+      "cir_file": "/var/folders/nm/l_mh2zs57p13r7yrkxw48y_c0000gn/T/spice_sim__kwce9ti/opamp-circuit_U3_R4_R3.cir",
+      "log_file": "/var/folders/nm/l_mh2zs57p13r7yrkxw48y_c0000gn/T/spice_sim__kwce9ti/opamp-circuit_U3_R4_R3.log",
+      "elapsed_s": 0.141,
+      "reference": "U3"
+    }
+  ],
+  "trust_summary": {
+    "total_findings": 0,
+    "trust_level": "high",
+    "by_confidence": {
+      "deterministic": 0,
+      "heuristic": 0,
+      "datasheet-backed": 0
+    },
+    "by_evidence_source": {
+      "datasheet": 0,
+      "topology": 0,
+      "heuristic_rule": 0,
+      "symbol_footprint": 0,
+      "bom": 0,
+      "geometry": 0,
+      "api_lookup": 0
+    },
+    "provenance_coverage_pct": null
+  },
+  "workdir": "/var/folders/nm/l_mh2zs57p13r7yrkxw48y_c0000gn/T/spice_sim__kwce9ti",
+  "total_elapsed_s": 0.141,
+  "simulator": "/usr/local/bin/ngspice",
+  "ngspice": "/usr/local/bin/ngspice"
+}
