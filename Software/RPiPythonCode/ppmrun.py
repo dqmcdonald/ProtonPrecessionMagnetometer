@@ -133,6 +133,17 @@ def build_parser():
                         "average.  SNR improves by √N but total time scales "
                         "linearly with N (default: 1)")
 
+    p.add_argument("--retries", type=int, default=2, metavar="N",
+                   help="How many times to re-attempt a cycle whose data frame "
+                        "never arrives.  The coil's switch-off transient can "
+                        "wedge the USB-serial adapter's UART engine: the board "
+                        "completes the cycle and transmits, but the host's "
+                        "handle has gone deaf and every read returns nothing.  "
+                        "Re-opening the port resets the adapter and recovers "
+                        "the link, so the cycle is simply repeated (the data "
+                        "for that cycle is gone either way).  0 disables "
+                        "(default: 2)")
+
     p.add_argument("--background-runs", type=int, default=0, metavar="N",
                    help="Number of background (coil-off) acquisitions to "
                         "collect before the measurement runs.  Their averaged "
@@ -442,7 +453,8 @@ def vprint(msg, verbose):
         print(msg)
 
 
-def _collect_cycles(ppm, n, run_dir, logger, verbose, background=False):
+def _collect_cycles(ppm, n, run_dir, logger, verbose, background=False,
+                    retries=0):
     """Perform n measurement cycles on an open PPMRun and return the results.
 
     Each run is saved to its own numbered .dat file ("run_XX.dat", or
@@ -457,6 +469,14 @@ def _collect_cycles(ppm, n, run_dir, logger, verbose, background=False):
         verbose:    If True, print progress to stdout.
         background: If True, perform sample-only background acquisitions
                     (coil never energised).
+        retries:    Extra attempts allowed per cycle after a lost data frame.
+                    The board is not the problem — it completes the cycle and
+                    transmits — but the coil's switch-off transient can wedge
+                    the USB-serial adapter's UART engine while it stays
+                    enumerated on the USB bus, after which every read returns
+                    nothing until the port is re-opened.  The frame for that
+                    cycle is gone either way (the board sent it into a dead
+                    handle), so the cycle is simply repeated.
 
     Returns:
         List of (sample_rate, sample_time_ms, signal_data) tuples, one per run.
@@ -467,19 +487,37 @@ def _collect_cycles(ppm, n, run_dir, logger, verbose, background=False):
     results = []
     for i in range(n):
         logger.info("Starting {} {}/{}".format(kind.lower(), i + 1, n))
-        vprint("\n[{} {}/{}] Sending configuration to Arduino...".format(
-            kind, i + 1, n), verbose)
-        # Re-send configured values before each run in case the Arduino was
-        # reset or powered off between runs.
-        ppm.sendConfiguredValues()
-        if background:
-            vprint("[{} {}/{}] Sampling with coil off (noise + interference "
-                   "only)...".format(kind, i + 1, n), verbose)
-        else:
-            vprint("[{} {}/{}] Polarising coil for {} ms...".format(
-                kind, i + 1, n, ppm._on_time), verbose)
         out_path = os.path.join(run_dir, "{}_{:02d}.dat".format(file_prefix, i))
-        ppm.doMeasurement(output_path=out_path, background=background)
+
+        for attempt in range(retries + 1):
+            vprint("\n[{} {}/{}] Sending configuration to Arduino...".format(
+                kind, i + 1, n), verbose)
+            # Re-send configured values before every attempt: the Arduino may
+            # have been reset or powered off between runs, and recovering a
+            # wedged link re-opens the port, which can reset it too.
+            ppm.sendConfiguredValues()
+            if background:
+                vprint("[{} {}/{}] Sampling with coil off (noise + interference "
+                       "only)...".format(kind, i + 1, n), verbose)
+            else:
+                vprint("[{} {}/{}] Polarising coil for {} ms...".format(
+                    kind, i + 1, n, ppm._on_time), verbose)
+            try:
+                ppm.doMeasurement(output_path=out_path, background=background)
+                break
+            except IOError as exc:
+                if attempt == retries:
+                    raise
+                logger.warning("{} {}/{} attempt {}/{} lost its data frame: "
+                               "{}".format(kind, i + 1, n, attempt + 1,
+                                           retries + 1, exc))
+                vprint("[{} {}/{}] Data frame lost; recovering the link and "
+                       "retrying...".format(kind, i + 1, n), verbose)
+                # doMeasurement's probe already re-opens the port when it finds
+                # the handle dead, but reopen() is cheap and idempotent, and it
+                # also covers a frame lost for some other reason.
+                ppm.reopen()
+
         actual_rate = ppm.getActualSampleRate()
         n_samples = len(ppm.getSignalData())
         vprint("[{} {}/{}] Sampling complete: {} samples at {} Hz  →  {:.2f} s window".format(
@@ -542,9 +580,11 @@ def collect_runs(args, run_dir, logger, verbose=False):
     background_runs = []
     if args.background_runs > 0:
         background_runs = _collect_cycles(
-            ppm, args.background_runs, run_dir, logger, verbose, background=True)
+            ppm, args.background_runs, run_dir, logger, verbose,
+            background=True, retries=args.retries)
 
-    signal_runs = _collect_cycles(ppm, args.runs, run_dir, logger, verbose)
+    signal_runs = _collect_cycles(ppm, args.runs, run_dir, logger, verbose,
+                                  retries=args.retries)
     return signal_runs, background_runs
 
 

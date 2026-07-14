@@ -1223,7 +1223,31 @@ electronics). **Verdict: do it.**
 
 ---
 
-## Quick reference — key specs from the book
+## Update 2026-07-12 — site1 runs (big sample + 20 m from building): still nothing; binary-failure analysis → gradient-broadening hypothesis
+
+Site1 runs (`Software/RPiPythonCode/data/site1/`, larger degassed-water bottle
+filling one sensor coil, rig ~20 m from the building): comb-notch Larmor gap
+still empty (EW gap peak 5.3 dB / NS 4.1 dB over in-gap median = noise), decay
+ratios 1.10/1.13 (need >1.3), and the 20 m move produced **no measurable drop
+in mains-harmonic power** (±3 dB run scatter) — so distance is not the lever,
+and the EW +58% gap-power excess is broadband noise, not a line.
+
+That prompted a full "why NEVER any signal" review, written up in
+**`gradient-broadening-hypothesis.md`** (this dir). Summary: the EMF budget
+(Design calc 2 above) predicts 25–40 dB single-shot — and the book's own
+Fig 7.6 peak is only ~24 dB — so the failure is **binary**, and every binary
+candidate is excluded by the verification record **except one: T2* crushed to
+≲10–15 ms by static field gradients** (basalt geology ± ferrous rig parts;
+300–500 nT across the 10 cm sample suffices). Every decay test to date is
+structurally blind to this because sampling starts at DELAY ≥ 25 ms — a
+short-T2* FID would be 92% gone and smeared over 30+ Hz before the first
+sample. Test plan (ranked, see the doc): (1) phone-magnetometer gradient
+survey at the sensor position, threshold ~300 nT across the sample;
+(2) `delay = 5` run + fine early-envelope check; (3) one session on
+non-basalt ground (beach — also kills the mains comb); (4) if survey clean,
+re-verify budget inputs (polarizing field at sample, calibrated µV
+injection). Tilt sweep demoted — geometry can't produce a total null from a
+horizontal EW axis.
 - Amplifier gain ≈ 3.8 M (two INA217 stages, ~1958 each; audio transformer
   bandpass ~2.3 kHz; OP177G limiter clamps ±10 V). Powered by lantern
   batteries (±12 V).
@@ -1238,3 +1262,94 @@ electronics). **Verdict: do it.**
   AT90S2313 (Appendix B).
 - Book web page / calculators: http://www.exstrom.com/magnum.html and the
   Digital Signal Processing page http://www.exstrom.com/journal/sigproc/
+
+## Update 2026-07-14 — `delay = 5` executed (Test 2): no FID, and the front end is BLIND for the first ~40 ms
+
+Ran the gradient-broadening plan's Test 2 (`delay = 5`). Two outcomes: a serial
+bug that had to be fixed first, and a physics finding that **amends the test
+plan** — see `gradient-broadening-hypothesis.md` §4 Test 2.
+
+### The blocker that had to be cleared first: marker timeouts were the USB-serial link
+
+`ppmrun.py` kept dying with `IOError: Timed out waiting for binary data marker`.
+**Root cause: the coil switch-off transient coupling into the USB cable** — the
+temporary battery/coil leads were run right alongside the USB lead. The FTDI
+adapter **stays enumerated** (macOS `log stream` on usbserial/FTDI shows no
+disconnect) but its **UART engine wedges**: every host read returns nothing for
+ever, while the Arduino is completely unaffected — its RGB LED walks the whole
+normal cycle, i.e. `sendData()` ran and clocked all 64 KB out of the TX pin into
+a deaf handle. **Re-opening the port clears it** (the driver reconfigures and
+purges the chip). Decisive evidence in
+`data/delay/SAMPLE_5MS_2026_07_14_16_31_02/ppm.log`: after the timeout, `READV`
+on the existing handle → silence; re-open → `READV` answers instantly. Leads
+re-strung away from the USB cable; twisting the coil/battery pair is the further
+fix (loop area is what radiates).
+
+**Red herrings — do not re-chase:**
+- *The delay value.* 25 ms (30+ clean prior sessions) failed identically, and
+  5 ms later ran 6/6 clean. Also `delay` and `cool_down` appear in **both** the
+  marker deadline and the real cycle time, so they cancel out of the margin and
+  can never squeeze the timeout.
+- *The baud rate.* 250000 is an exact divisor of the 16 MHz AVR clock (0% error,
+  unlike 115200's ~2.1%); background runs push the identical 64 KB frame at the
+  identical baud and have **never** failed; and the failure signature is **zero**
+  bytes, not corrupt bytes (a marginal baud gives framing errors, not silence).
+- *Board brownout/reset.* No boot banner ever appears in the stream.
+
+Only coil-energising runs ever fail; `BKGND` (coil never energised) runs never
+do — that asymmetry is the whole tell. Host-side changes (all in
+`Software/RPiPythonCode`, 31 tests pass): `_sync_to_marker()` now captures the
+bytes it discards and diagnoses the timeout three ways (boot banner ⇒ board
+reset / bytes-but-no-marker ⇒ corrupted frame / silence ⇒ nothing arrived);
+`_probe_link()` sends `READV`, then re-opens and asks again, so the traceback
+itself says whether the board or the link died; `reopen()`; `--retries`
+(default 2) repeats a cycle whose frame was lost. Retries are logged as
+warnings, so **retries/session is a hardware-health metric** — the 12-run
+session below needed 4.
+
+⚠ **Do NOT "fix" the transient with a plain freewheel diode across the coil** —
+its L/R decay is milliseconds, i.e. adiabatic against the ~411 µs Larmor period,
+and would destroy the FID. If clamping is ever needed, use a TVS/zener
+(µs collapse). The existing quench already avalanche-clamps at ~−312 V in
+~50–66 µs and is verified good (07-03/07-04); nothing there needs changing.
+
+### The physics result: no FID, and a NEW blocker
+
+Session `data/delay/SAMPLE_5MS_2026_07_14_16_39_12` (12 signal + 6 background,
+on-time 6000 / sample-time 2000 / sample-rate 16000 / **delay 5** / cool-down
+10000). Analysis scripts in session scratchpad (`early.py`, `early2.py`).
+
+The coil-pulsed runs show a **big decaying in-band excess** the coil-off
+backgrounds lack — head(5–35 ms)/tail(1–2 s) envelope ratio **6.26 ± 0.43**
+across all 12 runs vs **1.02** for backgrounds. It is **not** a proton signal:
+
+| observation | value | reading |
+|---|---|---|
+| peak count, 5–10 ms after quench | 31276 = **95% of full scale** (RMS 20565 vs steady 2060) | front end is **railed**; OP177G ±9.1 V limiter clamping |
+| envelope decay constant | **τ ≈ 38 ms** | tank (Q≈5) would be Q/πf ≈ 0.65 ms; water T2\* is 1–2.5 s → neither |
+| strongest early-window bin | **2349 Hz** | 47 × 50 = the mains harmonic already proven pinned to mains (06-28 retune test) |
+| Larmor gap (2405–2445) early excess | only 1.9× over background | nothing there |
+
+So the early excess is the **pulse-induced ring parking on a mains harmonic,
+seen through a saturated amplifier** — the 06-28 mechanism, now visible in full
+because we are finally looking early enough. A *steady* line appears to "decay"
+simply because the clipped gain is recovering.
+
+**The amendment that matters: `delay = 5` does not buy the window the hypothesis
+needs.** The first genuinely usable sample is still ~15–25 ms, and the front end
+is not settled until ~40 ms — essentially where `delay = 25` already put us. **If
+T2\* really is crushed to 10–15 ms, the FID is born and dies entirely inside the
+interval where the amplifier is blind.** Shortening the delay further cannot fix
+that; only stopping the overload can. The blocker is no longer firmware dead
+time, it is **input overload recovery in the amp**.
+
+Likely fix (to check against the book before building): a clamp at the **INA217
+inputs** — anti-parallel diodes conduct during the transient and are effectively
+open at µV levels. The existing ±9.1 V zener limiter is at the *output* of the
+chain: it protects the ADC but does nothing for the in-amp being slammed.
+
+**Control still missing:** `BKGND` never energises the coil, so it cannot
+reproduce a pulse-induced transient. The decisive control is a **coil-pulsed
+no-sample run at `delay = 5`** (same settings, bottle removed). If the early
+excess is unchanged without the sample, it is 100% amp/mains. Run this before
+the off-site trip so the trip starts from a clean baseline.

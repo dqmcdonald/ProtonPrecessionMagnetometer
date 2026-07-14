@@ -62,6 +62,19 @@ import numpy as np
 # in the serial buffer.
 DATA_MARKER = b"PPMD"
 
+# Slack added to the computed hardware cycle time before the host gives up on a
+# data frame.  It absorbs Arduino processing overhead and serial buffering, and
+# nothing else: the cool-down, polarise, settle and sample phases are all timed
+# by millis() on the AVR, so a healthy board delivers its marker within a few
+# tens of milliseconds of the predicted time.  A frame that misses this deadline
+# has almost never been "slow" — it was never sent.  Raise it only to test
+# whether a frame is genuinely late rather than lost.
+MARKER_MARGIN_MS = 2000
+
+# How many of the bytes seen while hunting for the marker to keep for the error
+# message.  Enough to show a boot banner or the head of a mis-framed data frame.
+DIAG_HEAD_BYTES = 64
+
 
 # ── Serial port configuration ─────────────────────────────────────────────────
 
@@ -108,6 +121,10 @@ EXECUTE_COMMAND    = "EXECU"
 # Background acquisition: sample-only cycle with the coil never energised.
 # Records amplifier noise + ambient interference for spectral subtraction.
 BACKGROUND_COMMAND = "BKGND"
+# Reads and prints a single ADC sample as a voltage.  Answered whenever the
+# board is idle or cooling, which makes it a harmless "are you still there?"
+# probe when a measurement frame fails to arrive (see _probe_link).
+READ_VOLTAGE_COMMAND = "READV"
 
 # ── Default hardware parameters ───────────────────────────────────────────────
 
@@ -261,6 +278,7 @@ class PPMRun:
         the first command.
         """
         self._ser = serial.Serial(port, BAUD_RATE, timeout=1)
+        self._port = port                 # kept so the link can be re-opened
         # Discard anything still queued on our transmit side; the receive side
         # (the Arduino's boot output) is consumed by _wait_for_ready() below.
         self._ser.reset_output_buffer()
@@ -470,23 +488,180 @@ class PPMRun:
                        marker has not appeared after this long.
 
         Raises:
-            IOError: if the marker is not seen within timeout_s.
+            IOError: if the marker is not seen within timeout_s.  The message
+                     reports what arrived instead — see _diagnose_missing_marker.
         """
         deadline = time.monotonic() + timeout_s
         window = bytearray()
+
+        # Everything read before the marker is discarded, but *what* was
+        # discarded is the only evidence available when a frame fails to turn
+        # up, so summarise it rather than dropping it silently.  The failure
+        # modes are easy to tell apart on the wire and have entirely different
+        # causes (see _diagnose_missing_marker).
+        n_read       = 0
+        head         = bytearray()   # first bytes seen, quoted in the error
+        banner_probe = bytearray()   # sliding window that spots a mid-cycle reboot
+        banner_bytes = READY_BANNER.encode("ascii")
+        saw_banner   = False
+
         while True:
             byte = self._ser.read(1)
             if not byte:
                 if time.monotonic() >= deadline:
                     raise IOError(
-                        "Timed out waiting for binary data marker "
-                        "after {:.1f} s".format(timeout_s))
+                        "Timed out waiting for binary data marker after "
+                        "{:.1f} s.  {}".format(
+                            timeout_s,
+                            self._diagnose_missing_marker(
+                                n_read, head, saw_banner)))
                 continue
+
+            n_read += 1
+            if len(head) < DIAG_HEAD_BYTES:
+                head.extend(byte)
+
+            # The firmware prints its banner on boot and nowhere else, so seeing
+            # it here means the board reset part-way through the cycle.
+            if not saw_banner:
+                banner_probe.extend(byte)
+                if len(banner_probe) > len(banner_bytes):
+                    del banner_probe[0]
+                saw_banner = banner_probe == banner_bytes
+
             window.extend(byte)
             if len(window) > len(DATA_MARKER):
                 del window[0]
             if window == DATA_MARKER:
+                # Stray bytes ahead of the marker are harmless (the frame is
+                # still correctly framed from here) but they are a symptom of a
+                # host/board desync, so leave a trace in the log.
+                stray = n_read - len(DATA_MARKER)
+                if stray:
+                    self.log("Discarded {} stray byte(s) before the data "
+                             "marker: {!r}".format(stray, bytes(head[:stray])))
                 return
+
+    @staticmethod
+    def _diagnose_missing_marker(n_read, head, saw_banner):
+        """Explain a marker timeout from whatever arrived in place of the frame.
+
+        Three signatures, three quite different faults:
+
+        * The boot banner — the Arduino reset mid-cycle, so no measurement was
+          ever taken.  The prime suspect is the coil switch-off: the flyback
+          transient from a ~5 mH coil is violent, and sampling that starts while
+          it is still live (a very short --delay) exposes the board to it just as
+          the ADC and SRAM begin drawing current on the SPI bus.
+        * Bytes, but no marker — a frame did arrive and its marker was corrupted,
+          so the host is out of sync rather than starved.
+        * Silence — the board acknowledged the command but never sent anything:
+          a stalled sampling loop, or a queued run that never fired.
+
+        Args:
+            n_read:     Number of bytes consumed while hunting for the marker.
+            head:       The first DIAG_HEAD_BYTES of them.
+            saw_banner: True if READY_BANNER appeared in the stream.
+
+        Returns:
+            A sentence naming the most likely cause, for the IOError message.
+        """
+        if saw_banner:
+            return ("The controller's boot banner arrived instead of a data "
+                    "frame: the Arduino reset part-way through the cycle and "
+                    "never took the measurement.  Suspect a brownout or EMI "
+                    "from the coil switch-off — raise --delay so sampling does "
+                    "not begin while the flyback transient is still live.")
+        if n_read == 0:
+            return ("The port stayed silent: not one byte of the frame arrived.")
+        return ("Read {} byte(s), none of them a marker: a data frame most "
+                "likely arrived with its marker corrupted, leaving the host out "
+                "of sync.  First bytes: {!r}".format(n_read, bytes(head)))
+
+    def reopen(self):
+        """Close and re-open the serial port, recovering a wedged link.
+
+        The coil's switch-off transient can leave the USB-serial adapter
+        enumerated on the USB bus but deaf on its UART side: reads from the open
+        handle return nothing for ever, while the Arduino carries on happily
+        (its RGB LED completes the normal cycle).  macOS logs no disconnect,
+        because the device never actually left the bus.
+
+        Opening the port reconfigures the adapter from scratch — the driver
+        resets its UART engine and purges its buffers — which is what actually
+        clears the fault.  Nothing about the board's state is disturbed: it may
+        or may not see a DTR reset, so the caller must re-upload the timing
+        parameters (sendConfiguredValues) before the next measurement rather
+        than assume they survived.
+
+        Raises:
+            serial.SerialException: if the port cannot be re-opened at all
+                                    (the adapter really has gone away).
+        """
+        self.log("Re-opening serial port {} to recover the link".format(self._port))
+        try:
+            self._ser.close()
+        except Exception:            # noqa: BLE001 - a dead handle may refuse to close
+            pass
+        self._ser = serial.Serial(self._port, BAUD_RATE, timeout=1)
+        self._ser.reset_output_buffer()
+        # Tolerant wait: a re-open does not always reset the board, so the boot
+        # banner may never come.  _wait_for_ready() logs and returns in that case.
+        self._wait_for_ready(READY_TIMEOUT_S)
+
+    def _probe_link(self):
+        """After a lost frame, decide whether the board or the link is at fault.
+
+        A silent port has two very different causes, and the RGB LED tells them
+        apart at the bench: if the board runs its whole cycle (red → purple →
+        yellow → blue → green) while the host receives nothing, then sendData()
+        did execute and clocked the frame out of the AVR's TX pin — the bytes
+        were lost between the Arduino and the host, not never sent.
+
+        This probe distinguishes the two without leaving the desk.  READV is a
+        harmless single-sample command that the firmware answers whenever it is
+        idle or cooling, so it costs nothing to ask:
+
+        * an answer on the existing handle — the link is up and the board really
+          did fail to send the frame;
+        * silence now, but an answer after re-opening the port — the handle went
+          stale underneath us.  The USB-serial adapter dropped off the bus (reset
+          or re-enumerated) and every read since has returned nothing.  The coil
+          pulse is the only thing happening at that moment, so suspect the
+          adapter's supply or ground: a marginal GND between the battery-powered
+          board and the adapter lets the coil's return current shift the serial
+          reference, and a loose USB or TX/GND lead does the same job mechanically.
+        * silence both ways — the board or its wiring is dead; check power.
+
+        Re-opening toggles DTR and resets the Arduino, which is harmless here:
+        the run has already failed, and a reset also guarantees the coil is
+        de-energised.
+
+        Returns:
+            A sentence describing what the probe found, for the IOError message.
+            Never raises — a diagnostic must not mask the failure it explains.
+        """
+        try:
+            alive_now = bool(self.send(READ_VOLTAGE_COMMAND))
+            if alive_now:
+                return ("The board still answers on the existing connection, so "
+                        "the link is up and the frame was genuinely never sent.")
+
+            # Silent on the open handle.  Re-open and ask again: if the board
+            # answers a fresh handle, the old one was stale.
+            self.reopen()
+            alive_after_reopen = bool(self.send(READ_VOLTAGE_COMMAND))
+        except Exception as exc:                      # noqa: BLE001 - diagnostic
+            return ("Probing the link after the timeout failed: {!r}".format(exc))
+
+        if alive_after_reopen:
+            return ("The board went silent on the open handle but answers again "
+                    "after re-opening the port — the USB-serial link dropped out "
+                    "mid-run and the host was reading a dead handle.  The board "
+                    "itself is fine.  Suspect the serial/USB connection or its "
+                    "ground: the coil pulse is what knocks it over.")
+        return ("The board does not answer even after re-opening the port — the "
+                "controller or its power/wiring is dead, not just the link.")
 
     def sendCommand(self, command, value=None):
         """Format and send a command with an optional integer parameter.
@@ -612,11 +787,20 @@ class PPMRun:
         # BKGND sent during the previous run's cool-down is queued by the
         # firmware just like EXECU.
         if background:
-            marker_timeout = (self._cool_down + self._sample_time + 2000) / 1000
+            marker_timeout = (self._cool_down + self._sample_time +
+                              MARKER_MARGIN_MS) / 1000
         else:
             marker_timeout = (self._cool_down + self._on_time + self._delay +
-                              self._sample_time + 2000) / 1000
-        self._sync_to_marker(marker_timeout)
+                              self._sample_time + MARKER_MARGIN_MS) / 1000
+        # A lost frame is ambiguous on its own: the board may have failed to send
+        # it, or it may have sent it into a serial link that is no longer there.
+        # Ask the board directly before giving up, and fold the answer into the
+        # error so the traceback names the culprit.
+        try:
+            self._sync_to_marker(marker_timeout)
+        except IOError as exc:
+            raise IOError("{}  {}".format(exc, self._probe_link())) from exc
+
         header = self._read_exact(8)
         self._actual_sample_rate, num_samples = struct.unpack("<II", header)
         self.log("Actual Sample Rate:  '{}' samples/s".format(self._actual_sample_rate))
