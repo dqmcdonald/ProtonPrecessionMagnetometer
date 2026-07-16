@@ -1,5 +1,16 @@
 # Orientation sweep — finding the polarising-coil angle that gives an FID
 
+> **SUPERSEDED 2026-07-16 — orientation was NOT the blocker.** The first
+> confirmed FID (Groynes, off-basalt) appeared at the ordinary horizontal E–W
+> *and* N–S orientations with no sweep, and EW vs NS read the same field to
+> ~5 nT. The blocker was **gradient-broadened T2\*** on basalt, not polarising
+> geometry (as `gradient-broadening-hypothesis.md` §5 already argued — a
+> horizontal-EW axis is ≥ 82° from the field for any plausible declination, so
+> orientation can only *modulate*, never null). Keep this procedure only as a
+> later **optimization** once home operation works; the fine azimuth/tilt sweep
+> is not a path to a first detection. See `magnetometer-debug-notes.md`
+> (2026-07-16) for the live next-steps list.
+
 **Why this is the next move.** With mains combed out (`comb_notch.py`) the
 2200–2600 Hz band is clean and still shows *no* decaying, sample-dependent line.
 That points upstream of interference to signal *generation*: a proton FID only

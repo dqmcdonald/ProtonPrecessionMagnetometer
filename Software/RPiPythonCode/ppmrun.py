@@ -767,6 +767,14 @@ def analyse(runs_data, args, run_dir, verbose=False, logger=None,
             calc.plotSignal(
                 path, title="{} — filtered, run {}".format(plot_title, i))
 
+            # Single-plot view of the whole record with its decay envelope +
+            # exponential T2* fit — makes an FID's decay visible in one axis
+            # (the three-panel filtered plot only shows start/middle/end).
+            path = os.path.join(run_dir, "envelope_{:02d}.png".format(i))
+            vprint("  [{}] Saving envelope/decay plot → {}".format(i, path), verbose)
+            calc.plotFilteredEnvelope(
+                path, title="{} — FID decay, run {}".format(plot_title, i))
+
         # Compute periodogram on the filtered signal.  The frequency resolution
         # is sample_rate / num_samples ≈ 1 Hz for a 16000-sample, 1-second record.
         # The Hann window suppresses spectral leakage from the record edges.

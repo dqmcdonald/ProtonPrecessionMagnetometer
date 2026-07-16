@@ -1353,3 +1353,135 @@ reproduce a pulse-induced transient. The decisive control is a **coil-pulsed
 no-sample run at `delay = 5`** (same settings, bottle removed). If the early
 excess is unchanged without the sample, it is 100% amp/mains. Run this before
 the off-site trip so the trip starts from a clean baseline.
+
+---
+
+## 2026-07-16 — ★ FIRST CONFIRMED PROTON FID (off-basalt, the Groynes) ★
+
+Test 3 of `gradient-broadening-hypothesis.md` was executed and **the signal
+appeared.** The fully battery-powered rig — **unchanged** from its basalt
+configuration — was driven ~10 km off the volcanic peninsula to "The Groynes,"
+a regional park on the sediment/gravel floodplain of a braided river
+(magnetically + electrically quiet). Data: `Software/RPiPythonCode/data/groynes/`
+(`SAMPLE_EW`, `SAMPLE_NS` 6 runs each; `NOSAMPLE_EW` control; `SAMPLE_TOOLBOX_NS`
+a deliberate ferrous-gradient spoiler; `SAMPLE_NS_1RUN` an averaging test).
+ppm.ini: on-time 6000 / sample-time 2000 / sample-rate 16000 / **delay 50**,
+band 2000–2800.
+
+### The five proofs — every discriminator that was NEGATIVE on basalt is now POSITIVE
+
+| # | Test | Result | Basalt history |
+|---|---|---|---|
+| 1 | **Locked line** | 2431.4 Hz, SNR 26–32 dB, identical across all 6 runs of EW *and* NS (spread 0.44 Hz ≈ 10 nT) | peak wandered the whole gap run-to-run |
+| 2 | **Sample-dependent** | NOSAMPLE control has no line — strongest bin scatters 2312–2511 Hz at ~7–12 dB (noise) | sample ≈ no-sample, always |
+| 3 | **Envelope decays** | Hilbert envelope fits **T2\* ≈ 0.8–1.6 s** (clean exponential); controls flat | early/late ratio ≈ 1.0 (flat) every time |
+| 4 | **Ferrous mass kills it** | toolbox beside coils → SNR to ~7–13 dB, frequency de-locks (2336–2516) | n/a — new positive control |
+| 5 | **Off the mains comb** | 2431 = 48.6 × 50, sits in the 2400/2450 harmonic gap | lines were always ON 50 Hz harmonics |
+
+Proof 4 is the clincher and a **positive, on-demand reproduction of the
+broadening mechanism**: only an NMR signal — which depends on B0 homogeneity
+across the sample — is destroyed by a nearby ferrous mass; a mains tone or
+electronic resonance is unaffected. The toolbox is now a keeper diagnostic.
+
+### Field agreement
+2431.4 Hz → **B = 57.11 µT** (γ_p = 42.5775 MHz/T). Nearest observatory
+(~20 km, 15-Jul UTC) baseline ~57.16 µT ⇒ agree to **~55 nT = 0.10 %** — the
+residual is the site's crustal offset. EW vs NS agree to ~5 nT (57.106 vs
+57.10 µT): correct behaviour for a **scalar |B|** instrument, whose reading must
+be orientation-independent — and is.
+
+### Averaging finding (the single-run test)
+`SAMPLE_NS_1RUN` (1 run) gave 29.5 dB — essentially identical to the 6-run
+average (29.0 dB). **The rig is not random-noise-limited here**; one FID already
+clears ~29 dB. Value of the 6-run protocol now = rejecting USB-dropout cycles +
+confirming the frequency lock + √N-tightening the *field* estimate, NOT digging a
+marginal signal out of noise. (Caveat: the FFT line is resolution-limited — 0.5 Hz
+bins over a 2 s record — so the ~1.5 Hz FWHM is the window, not the true
+linewidth, which from T2\* ≈ 1 s is ~0.3 Hz.)
+
+### Tooling added this session
+`PPMCalc.plotFilteredEnvelope()` (+ pipeline hook in `ppmrun.py`, + 4 tests):
+every run now auto-generates `envelope_NN.png` — the whole filtered record in one
+axis with its Hilbert envelope and an A·exp(−t/T2\*)+C fit, so the decay reads as
+one continuous curve (with a `log_scale` option where a true exponential is a
+straight line). Committed on branch `add-fid-envelope-plot`.
+
+---
+
+## Next steps (ranked) — now that the instrument is proven
+
+The design **works end-to-end**. Two distinct goals now, with different levers.
+
+### A. The specific question: would a SMALLER sample help? — *Yes, but only at home (basalt), not at a quiet site.*
+
+The gradient-limited linewidth is Δf = (γ/2π)·ΔB = 0.0426 Hz/nT × (G·L), where
+G is the local static-field gradient and L the sample extent along it, so the
+gradient-limited **T2\* ≈ 1/(π·Δf) ∝ 1/L** — halve the sample, double T2\*.
+
+But note the matched-filter arithmetic first, so we don't over-claim:
+peak spectral height ∝ S0·T2\*, and S0 (proton count) ∝ volume ∝ L. So
+S0·T2\* ∝ L·(1/L) = **constant** — for a *fully observed* line, shrinking the
+sample trades signal for linewidth one-for-one and the SNR of the peak barely
+moves. **Smaller sample is not a general sensitivity win.** It is decisive at
+home for two reasons that have nothing to do with matched-filter SNR:
+
+1. **Dead-time survival (the big one).** At home the FID must survive the
+   ~40 ms amplifier-overload blind window (2026-07-14). If basalt crushes
+   T2\* to ~15 ms, only e^(−40/15) ≈ **7 %** of the FID is left when the amp
+   clears. Shrink L by ~4× → T2\* ≈ 60 ms → e^(−40/60) ≈ **51 %** left: a ~7×
+   gain in *observable* amplitude — the difference between annihilated and
+   detectable. The one-for-one SNR trade assumes you can see the whole decay;
+   at home you can't, so lengthening T2\* past the dead time is pure win.
+2. **Mains-gap fit.** A 30 Hz-wide gradient-broadened line straddles the
+   2400/2450 harmonics and is inseparable from mains; a ~3 Hz line drops
+   cleanly into the 2412–2438 gap.
+
+**At the Groynes the opposite holds:** T2\* ≈ 1 s is already tank/intrinsic-
+limited (the line is resolution-limited, not gradient-broadened), so a smaller
+sample there just throws away signal for zero linewidth gain. **So: smaller
+sample is a HOME lever, worth trying with a small vial or a thin (~1–2 cm)
+tube of degassed water on basalt** — watch `envelope_NN.png` for a longer T2\*
+and a line that clears the mains gap. Even a partial recovery quantifies the
+mechanism.
+
+### B. Make it work AT HOME (basalt) — the real prize (gradient mitigation)
+
+1. **Smaller sample** — as above (free, do first).
+2. **Test 2b — input clamp at the INA217 inputs** (anti-parallel diodes;
+   open at µV, conduct on the quench transient). Shortening the ~40 ms overload
+   recovery to ~ms lets a full-size, short-T2\* sample be seen *without* giving
+   up signal — the complementary lever to the smaller sample. Details:
+   `gradient-broadening-hypothesis.md` §4 Test 2b.
+3. **Static gradient survey (Test 1, still never done, now higher value).**
+   Phone magnetometer on a wooden stick, rig/battery moved away, map |B| over
+   ±15 cm at the sample position — **at BOTH home and the Groynes**. Confirms
+   the mechanism quantitatively (predict home ΔB ≳ 300 nT vs Groynes ≪ 100 nT)
+   and finds whether the worst gradient is geology or a rig-local ferrous part.
+4. **Remove rig-local ferrous** — steel bottle cap, battery position, platform
+   brackets; a single steel screw at 10 cm is µT-scale. Possibly the cheapest
+   home gain of all, and separable from geology by the survey (move the object,
+   re-read).
+5. **Shim** — only if 1–4 fall short: a first-order gradient coil or a
+   permanent-magnet shim to cancel the local gradient. Advanced; last resort.
+
+### C. Characterise the instrument (at a quiet site, now that there IS a signal)
+
+1. **T1 (polarization buildup)** — vary on-time (e.g. 1/2/4/6/8 s), plot peak
+   vs on-time; if it saturates well before 6 s, shorten it to speed the cycle.
+2. **T2\* vs sample size / degassing** — the envelope fit is now automated;
+   quantify how much degassing (paramagnetic-O2 removal) buys.
+3. **Longer sample-time** — 3–4 s to resolve the true ~0.3 Hz linewidth for a
+   better field number (diminishing past ~3× T2\*, i.e. ~3 s here).
+4. **Don't over-average** — 1 run ≈ 6; spend runs on field-vs-time instead.
+
+### D. Use it as a magnetometer (the point of the project)
+
+1. **Diurnal tracking** at a fixed quiet site vs the observatory curve — the
+   0.1 % absolute agreement means the numbers are now trustworthy.
+2. **Ferrous-anomaly detection** — the toolbox run already proved sensitivity
+   to a nearby ferrous mass; a controlled distance sweep turns that into a
+   detector characterisation.
+
+*Immediate suggestion:* one more Groynes-class session to confirm repeatability
+and run the T1/on-time sweep, in parallel with the free home levers (small
+sample + de-ferrous the platform + gradient survey).
