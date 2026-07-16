@@ -1461,7 +1461,18 @@ mechanism.
    brackets; a single steel screw at 10 cm is µT-scale. Possibly the cheapest
    home gain of all, and separable from geology by the survey (move the object,
    re-read).
-5. **Shim** — only if 1–4 fall short: a first-order gradient coil or a
+5. **Raise the sensor off the ground** — Test 3 (the escape that worked) done
+   *vertically, in place*. Upward continuation low-passes the gradient: a
+   λ-wavelength component attenuates as exp(−2π·h/λ), so h ≈ 1 m knocks a
+   short-wavelength (few-metre) basalt anomaly down ~20× while a broad regional
+   one barely moves. Attacks the *geology* half only (rig-local ferrous rides up
+   with the sensor — that's #4's job). Nearly free to test: Test 1's **two-height**
+   survey data already measures the vertical decay, so you know whether 1–2 m buys
+   the needed ~10–15× before building a non-ferrous (wood/PVC) stand. Unlike #1/#2
+   this lengthens T2\* by shrinking the gradient rather than fighting the dead time.
+   If adopted as an operating parameter, log the height. Full rationale:
+   `gradient-broadening-hypothesis.md` §4 Test 3b.
+6. **Shim** — only if 1–5 fall short: a first-order gradient coil or a
    permanent-magnet shim to cancel the local gradient. Advanced; last resort.
 
 ### C. Characterise the instrument (at a quiet site, now that there IS a signal)
