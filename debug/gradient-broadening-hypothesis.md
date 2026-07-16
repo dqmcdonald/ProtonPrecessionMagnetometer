@@ -8,25 +8,38 @@ appeared, at any point, in any data set?"* This note works that question
 through the physics budget and the verification record, and lands on one
 surviving hypothesis with a concrete, mostly-free test plan.
 
-> **STATUS 2026-07-14 — hypothesis still UNTESTED, but now CORNERED.**
-> Test 2 (`delay = 5`) was run and found the **front end is saturated for the
-> first ~15 ms and still recovering out to ~40 ms** — the quench rails the ADC
-> to 95% of full scale. The blind window is set by **amplifier overload
-> recovery**, not by the firmware `DELAY`, so shortening `DELAY` buys nothing
-> and the "short-T2\* FID has never been observable" loophole *stands*.
+> **STATUS 2026-07-16 — ✅ HYPOTHESIS VINDICATED. Test 3 (off-site,
+> non-basalt) produced the FIRST CONFIRMED PROTON FID.** The rig, **unchanged**
+> from its basalt configuration, was driven ~10 km off the volcanic peninsula
+> to the Groynes (braided-river sediment/gravel flats) and showed a clean
+> decaying proton line: **2431.4 Hz, SNR 26–32 dB/run, T2\* ≈ 1.0 s**, present
+> ONLY with the water sample, killed by a ferrous toolbox set beside the coils,
+> and off the 50 Hz mains comb (2431 = 48.6 × 50). **B = 57.11 µT, matching the
+> regional observatory to ~0.1%.** This lands squarely on the §4 Test 3 fork —
+> *"signal appears off-site → gradient broadening confirmed."* The 2-month total
+> null was **environmental**: basalt static-field gradients crushed T2\* below
+> the ~40 ms amplifier-blind window at home; on sediment T2\* returns to ~1 s and
+> the FID sits in plain sight, exactly as §3 predicted. Full data + analysis:
+> `Software/RPiPythonCode/data/groynes/` and the 2026-07-16 section of
+> `magnetometer-debug-notes.md`.
 >
-> **The bound this implies:** T2\* between ~50 ms and 2 s is now **excluded** by
-> our own envelope data, and T2\* ≲ 40 ms remains **invisible** behind the
-> amplifier. So it is one or the other: T2\* is short enough to hide in the
-> blind window (≈ the 10–15 ms this note predicted), **or there is no signal at
-> all.** Note our 40 ms dead time is already ~5× *better* than the book's own
-> ~222 ms (`DELAY` 100 ms + 2000 discarded points at 16384 Hz) — we look earlier
-> than a known-working rig, so a normal long-T2\* signal could not be hiding
-> from us.
+> **What this settles and what remains.** The *instrument* is now proven
+> end-to-end — the design works. The open problem is no longer "is there a
+> signal" but "make it work AT HOME on basalt," which is a **gradient-mitigation**
+> task, not rig debugging. Both home-enabling levers attack the same "FID dies
+> inside the ~40 ms blind window" bottleneck from opposite ends:
+> **(a) smaller sample** — lengthen the gradient-limited T2\* so more FID survives
+> the dead time (free, passive; costs signal amplitude — see the tradeoff
+> analysis in the 2026-07-16 debug-notes section); **(b) Test 2b input clamp** —
+> shorten the dead time so a full-size, short-T2\* sample is observable (hardware,
+> keeps signal). See the ranked next-steps list in `magnetometer-debug-notes.md`.
 >
-> **Test 3 (off-site, non-basalt) is therefore promoted to the decisive fork,
-> and needs no hardware change.** Test **2b** (input clamp at the INA217 inputs)
-> is the gating fix only if the basalt site must be made to work. Details in §4.
+> ---
+> *Superseded status (2026-07-14, kept for the reasoning trail): hypothesis
+> UNTESTED but CORNERED — `delay = 5` showed the blind window is set by
+> amplifier overload recovery (~40 ms), not firmware `DELAY`; that bounded T2\*
+> to either ≲ 40 ms (hidden) or nonexistent, promoting Test 3 to the decisive
+> fork. Test 3 has now resolved it in favour of the hypothesis. Details in §4.*
 
 ---
 
@@ -220,7 +233,16 @@ coil-pulsed no-sample run. Run one at `delay = 5` (same settings, bottle
 removed). If the early excess is unchanged without the sample, it is 100%
 amp/mains, as the numbers above imply.
 
-### Test 3 — One session on non-basalt ground — **PROMOTED: now the decisive fork**
+### Test 3 — One session on non-basalt ground — ✅ **RUN 2026-07-16: SIGNAL APPEARED — hypothesis confirmed**
+
+> **RESULT (Groynes, sediment/gravel flats, ~10 km off-basalt, rig unchanged):**
+> first confirmed proton FID — 2431.4 Hz, SNR 26–32 dB/run, **T2\* ≈ 1.0 s**,
+> sample-dependent, off the mains comb, killed by a nearby ferrous mass, B =
+> 57.11 µT (observatory-matched to 0.1%). This is the "signal appears off-site"
+> branch below → **gradient broadening confirmed**. See the top-of-file STATUS
+> block and the 2026-07-16 debug-notes section for the full five-proof writeup
+> and next steps. The rest of this section is the pre-run rationale.
+
 
 A beach / alluvial flat kills the basalt gradient AND the mains comb in one
 trip (rig is already fully battery-portable). If Test 1 shows big gradients,
