@@ -265,6 +265,51 @@ Use **`delay = 25`**, not 5: the 5 ms buys nothing while the amplifier is blind
 for ~40 ms regardless, and 25 keeps the capture directly comparable with every
 historical run. Take a coil-pulsed no-sample control at the same site.
 
+### Test 3b — Raise the sensor off the ground: Test 3 done *vertically* (home fix, ~free to test)
+
+Test 3 escaped the basalt by moving ~10 km **horizontally**. Height is the same
+escape done **vertically, in place** — a partial relocation that stays at home.
+It attacks a *different* part of the bottleneck than the smaller-sample / input-
+clamp levers: those help a short-T2\* FID *survive the dead time*; raising the
+sensor instead tries to **lengthen T2\* itself by reducing the gradient the sample
+sits in.**
+
+**Why it should work (and how far).** For a distributed near-surface source like
+basalt, elevation acts as **upward continuation** — a low-pass spatial filter. A
+gradient component of horizontal wavelength λ is attenuated with height h by
+≈ **exp(−2π·h/λ)**:
+
+| gradient content | at h = 1 m | reading |
+|---|---|---|
+| short-wavelength inhomogeneity, λ ≈ 2 m | exp(−π) ≈ **0.04** (~23×) | the steepest gradients — killed fast |
+| regional / flow-scale, λ ≈ 30 m | ≈ 0.8 (~20% off) | barely touched, but already *gentle* (little ΔB across 10 cm) |
+
+The gradient crushing T2\* is almost certainly dominated by the short-wavelength
+content — an infinite *uniform* half-space has zero gradient, so all of ΔB comes
+from the lateral departures-from-uniformity, i.e. exactly what height suppresses.
+Dragging 400 nT toward the book-like <30 nT needs ~10–15×, which 1–2 m plausibly
+buys **if** the anomaly is short-wavelength.
+
+**The bound.** Height only helps against **ground/geology**. It does **nothing**
+against **rig-local ferrous** (bottle cap, brackets, battery, a stray screw) —
+those ride up with the sensor, so their r is unchanged. Height and de-ferrousing
+(§B.4) are complementary, not substitutes; the survey (Test 1) separates the two.
+
+**The free test — it's already latent in Test 1.** Test 1 maps |B| at *two
+heights*; that two-height data **is** the vertical-decay measurement. It tells you
+directly whether raising the rig buys the needed ~10–15× or only ~1.5× **before
+building anything.** If the two-height ratio is promising, confirm with a live
+run on a **non-ferrous** (wood/PVC) stand, sample raised ≥ 1 m, `delay = 25`,
+plus the coil-pulsed no-sample control; watch `envelope_NN.png` for a lengthened
+T2\*.
+
+Caveats: keep the whole support and polarizing-coil geometry non-ferrous; there
+is a mechanical ceiling, and against a long-wavelength anomaly you hit
+diminishing returns before book quality (the survey tells you which regime you're
+in first). If height becomes an operating parameter it **must be logged** — the
+sensitivity cuts both ways, and inconsistent height would itself masquerade as a
+field change.
+
 ### Test 4 — Only if the survey is clean: re-verify the budget's inputs
 
 If gradients are exonerated, some budget assumption is broken. Measure
