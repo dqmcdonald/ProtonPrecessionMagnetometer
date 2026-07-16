@@ -68,6 +68,7 @@
 #include <SPI.h>
 #include <Bounce2.h>
 #include <SRAMsimple.h>
+#include <avr/wdt.h>   // hardware watchdog — see "Watchdog safety" below
 
 // ── Pin definitions ──────────────────────────────────────────────────────────
 // const uint8_t is preferred over #define: type-safe and visible in debuggers.
@@ -106,6 +107,28 @@ const int SERIAL_BUFF_LEN = 32;
 
 // RTC square-wave frequency for elapsed-time measurement during sampling.
 const float RTC_FREQ_HZ = 32768.0f;
+
+// ── Watchdog safety ──────────────────────────────────────────────────────────
+// The only hazardous fault in this instrument is the coil being left energised.
+// At ~8 A through the ~1.5 Ω polarising coil that is ~90 W dissipated in a
+// winding rated for 6-second pulses; if the MCU ever locks up mid-polarisation
+// the coil would otherwise stay on indefinitely (overheating / deep-discharging
+// the battery).  A fuse cannot catch this — the fault current equals the normal
+// 8 A pulse current, so only DURATION distinguishes them.  The hardware watchdog
+// bounds that duration instead: loop() (and the long record/transmit loops) must
+// call wdt_reset() at least this often, or the AVR resets.  A reset drives every
+// pin high-impedance → COIL_PIN floats → optocoupler LED dark → MOSFET gate
+// pulled to +12 V → coil OFF (the same fail-safe state as boot), so a hang can
+// leave the coil on for at most ~one watchdog period rather than forever.
+//
+// WDTO_8S is the ATmega328P maximum.  It is chosen for margin, NOT tightness: it
+// must never false-trip during a legitimate blocking section (a full-buffer
+// transmit is ~5 s over 250000 baud, plus up to ~4 s of acquisition), because a
+// spurious reset mid-run corrupts the data frame — the exact failure signature
+// we just eliminated on the host side.  Worst-case stuck-on time is roughly
+// coil_activation_time + 8 s (~14 s at the 6 s default) — bounded and thermally
+// survivable, versus unbounded without the watchdog.
+const uint8_t WATCHDOG_TIMEOUT = WDTO_8S;
 
 // ── State machine ─────────────────────────────────────────────────────────────
 // Non-blocking design: the main loop never calls delay() except for the brief
@@ -177,6 +200,16 @@ int           getOp(const char *buff);
 // ── setup() ──────────────────────────────────────────────────────────────────
 
 void setup() {
+    // Disable the watchdog immediately on entry.  After a watchdog reset the
+    // WDT stays enabled (with its previous, possibly short timeout) on older
+    // bootloaders; if setup() did not finish before it expired the board would
+    // reset-loop indefinitely — recoverable only by ISP reflash.  Clearing all
+    // reset-source flags (which includes WDRF) is required before WDE can be
+    // cleared, so it must precede wdt_disable().  The watchdog is re-armed at the
+    // end of setup() once the slow initialisation below is complete.
+    MCUSR = 0;
+    wdt_disable();
+
     Serial.begin(BAUD_RATE);
     // If a command arrives partially (serial noise, host crash mid-send),
     // readBytesUntil() gives up after 200 ms rather than blocking forever.
@@ -235,12 +268,22 @@ void setup() {
     }
     Serial.println(memory_ok ? F("Memory check done — all passed\n")
                               : F("Memory check done — FAILURES DETECTED\n"));
+
+    // Arm the watchdog now that initialisation is complete.  See the
+    // "Watchdog safety" note above for the rationale and fail-safe reasoning.
+    wdt_enable(WATCHDOG_TIMEOUT);
     Serial.println(F("Setup done"));
 }
 
 // ── loop() ───────────────────────────────────────────────────────────────────
 
 void loop() {
+    // Pet the watchdog every iteration.  While IDLE / POLARISING / COOLING the
+    // loop spins fast, so a genuine MCU lock-up stops these calls and forces a
+    // reset (→ coil OFF) within WATCHDOG_TIMEOUT.  The blocking record/transmit
+    // loops pet it internally so they never false-trip on large sample counts.
+    wdt_reset();
+
     button.update();
 
     // Accept serial commands when idle or cooling.
@@ -271,6 +314,7 @@ void loop() {
                 // Brief blocking delay for the inductive transient to decay below
                 // the ADC input range before sampling begins.
                 delay(sample_delay);
+                wdt_reset();  // settle delay spans no loop() pet; coil already off
 
                 setRGBLEDColor(200, 200, 50);  // yellow = sampling
                 SampleData sd = recordSignal();
@@ -490,6 +534,12 @@ SampleData recordSignal() {
     uint8_t  temp[2];
 
     for (unsigned long i = 0; i < num_samples; i++) {
+        // Keep the watchdog satisfied during the long sample burst (up to
+        // MAX_SAMPLES ≈ 4 s of acquisition).  One WDR instruction every 1024
+        // samples is negligible against the per-sample SPI cost and adds no
+        // measurable jitter to the sample rate.
+        if ((i & 0x3FF) == 0) wdt_reset();
+
         int16_t voltage = read_voltage();
 
         // Store as big-endian bytes.  The sign bit is preserved in the raw
@@ -555,6 +605,10 @@ void sendData(unsigned long num_samples, unsigned long actual_sample_rate) {
     SPI.transfer(0x00);
 
     for (unsigned long i = 0; i < num_samples; i++) {
+        // The frame transfer is baud-limited (~5 s at MAX_SAMPLES over
+        // 250000 baud), longer than one watchdog period, so pet it periodically.
+        if ((i & 0x3FF) == 0) wdt_reset();
+
         uint8_t hi = SPI.transfer(0);   // SRAM holds samples big-endian
         uint8_t lo = SPI.transfer(0);
         // Emit each sample little-endian (low byte first) on the wire.
