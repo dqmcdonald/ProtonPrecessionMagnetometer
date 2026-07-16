@@ -216,16 +216,81 @@ the 40 ms blind window (the hypothesis, now cornered into almost exactly the
 10–15 ms it predicted), or there is no signal at all.** Both remaining branches
 are settled by Test 3, which needs no hardware change — see there.
 
-### Test 2b — Stop the front end saturating (NEW; now the gating test)
+### Test 2b — Stop the front end saturating (NEW; the home-enabling hardware fix)
 
 Nothing downstream can see a short-T2\* FID until the amplifier survives the
-quench without clipping. Likely fix, to check against the book before building:
-a clamp at the **INA217 inputs** — anti-parallel diodes conduct during the
-transient and are effectively open at µV signal levels. The existing ±9.1 V
-zener limiter sits at the *output* of the chain (OP177G): it protects the ADC
-but does nothing for the in-amp being slammed. Target: recovery in
-milliseconds, not tens of them, so that a 10–15 ms FID is actually observable.
-Re-run Test 2 afterwards.
+quench without clipping. Fix: a clamp at the **INA217 inputs** (U1, the first
+stage). The existing ±9.1 V zener limiter sits at the *output* of the chain
+(OP177G): it protects the ADC but does nothing for the in-amp being slammed.
+Target: recovery in milliseconds, not tens of them, so that a 10–15 ms FID is
+actually observable. Re-run Test 2 afterwards.
+
+**What the clamp does — and does not — do.** It is *not* meant to keep U1
+linear through the transient (no passive diode can: U1's gain is 1958, so it
+saturates at only ~5 mV differential — see amp-v2.0-design-review.md item 1 —
+and a silicon clamp holds ±0.6 V, still ~120× into overload). Its job is to
+**limit overdrive depth**, since overload-recovery time scales with how hard
+the input was driven: clamping a ~30 V kick to ~0.6 V cuts overdrive from
+~6000× to ~120× (~50×), which is the lever that should pull the 40 ms recovery
+down toward a few ms.
+
+**Where the diodes go — each input to GROUND (recommended for this topology).**
+The sensor coil lands on J2 with its electrical **centre grounded at J2.3**
+(the gradiometer mid-point; amp-v2.0-design-review.md item 2), so the two coil
+ends drive **U1 pin 4 (V_IN−)** and **pin 5 (V_IN+)** push-pull about ground.
+Put an **anti-parallel diode pair from each input node to GND** (4 diodes, or
+two dual packages) — this bounds each pin to ±one diode drop and, because the
+centre tap already references ground, clamps both the differential and the
+common-mode excursion.
+
+```
+ J2.1 ─[½ coil]─┬─ Rs(opt) ─┬──────── U1 pin 4 (V_IN−)
+ J2.3 ─ GND     │           ⊥ D1a▼ D1b▲ → GND
+ J2.2 ─[½ coil]─┴─ Rs(opt) ─┬──────── U1 pin 5 (V_IN+)
+                            ⊥ D2a▼ D2b▲ → GND
+```
+
+Alternatives: *across the coil* (pin 4↔pin 5) is a simpler 2-diode differential
+clamp — fine here since the grounded CT largely pins the common mode — but it
+leaves common-mode unbounded, so to-ground is preferred. *Clamping to the ±12 V
+rails* is the textbook in-amp method but clamps at ±12.6 V, far too loose for a
+part that saturates at 5 mV — not useful here.
+
+**Diode spec.** The usual worry (clamp leakage injecting offset into a µV path)
+is a **non-issue here**: the source impedance is only ~3 Ω through half the
+coil, so even 25 nA of leakage is ~75 nV of offset and the shot noise is
+~0.01 pV/√Hz. So the choice is driven by **clamp tightness and surge survival**,
+not leakage.
+
+| Parameter | Want | Note |
+|---|---|---|
+| Type | fast **silicon** switching diode | 0.6 V clamp; Schottky (0.3 V) clamps marginally tighter and its µA leakage is tolerable at 3 Ω, but U1 saturates either way so the gain is small |
+| trr | < ~50 ns | catch the fast quench edge |
+| Surge IFSM | ≥ ~1–2 A non-repetitive | survive the kick |
+| Capacitance | < ~5 pF | irrelevant at 2.4 kHz / low-Z |
+
+Concrete parts: **1N4148 / 1N4148W** (cheap, trr ~4 ns, ~2 A surge, <1 nA typ
+leakage — two per input to GND); or **BAV199** (SOT-23 dual low-leakage, tidy
+per-input pair); **BAS416** if belt-and-braces ultra-low leakage is wanted (not
+needed at 3 Ω). Avoid Schottky only if the front end later moves to a high-Z
+input.
+
+**Series resistor Rs (optional).** The coil's ~5.4 mH already limits di/dt into
+the clamp, so a bare 1N4148 will likely survive. To guarantee it, add
+**10–22 Ω** per input between coil and clamp node (clamp on the IC side of Rs).
+Noise cost is small — 2× 13 Ω raises front-end noise ~1.3 → ~1.45 nV/√Hz
+(~12 %). Keep ≤ ~22 Ω; 100 Ω would double the noise.
+
+**Before cutting copper:** scope U1 pin 4/5 to GND (10× probe) during a quench
+to measure the *actual* transient amplitude and duration — that confirms the
+surge rating and whether Rs is needed. **Expect partial success:** the ±0.6 V
+clamp reduces recovery depth but does not restore linearity, so if the scope
+still shows recovery too long after clamping, escalate to **active input
+blanking** — a small FET that shorts/disconnects the U1 inputs during the
+polarize+quench window and releases just before sampling. That is the definitive
+fix (keeps U1 out of overload entirely) but a bigger change; try the passive
+clamp first. (U1 also has weak internal input-protection diodes; the external
+clamp offloads them regardless.)
 
 **Control still owed on Test 2 either way:** `BKGND` never energises the coil,
 so it cannot reproduce a pulse-induced transient, and the 07-14 session had no
