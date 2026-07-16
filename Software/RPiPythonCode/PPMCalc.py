@@ -338,6 +338,126 @@ class PPMCalc:
         plt.close(fig)
         return fit_params
 
+    def plotFilteredEnvelope(self, file_name, title=None, log_scale=False,
+                             smooth_ms=20.0, fit_start_s=0.03):
+        """Plot the whole filtered record in one axis with its decay envelope.
+
+        This is the single-plot companion to plotSignal()'s three-panel view.
+        The filtered signal must already be bandpass-filtered (call
+        filterSignal() first) — this method does not filter, so it shows exactly
+        what went into the FFT.
+
+        Over the full ~2 s window the Larmor oscillation (~2.4 kHz ⇒ ~4800
+        cycles) is far too dense to resolve, so the raw trace collapses into a
+        solid band; what the eye actually reads is the *height* of that band,
+        i.e. the precession amplitude.  On top of it we draw:
+
+          * the analytic-signal (Hilbert) envelope, ±, which is the instantaneous
+            amplitude of the oscillation — the FID decay curve itself;
+          * an exponential fit  A·exp(−t / T2*) + C, where T2* is the effective
+            transverse relaxation time (spin dephasing plus static-field
+            inhomogeneity across the sample) and C is the noise floor the
+            envelope relaxes toward.
+
+        A genuine proton FID shows a clearly falling envelope (T2* of order
+        1 s for water); a steady interference tone gives a flat band, and pure
+        noise gives a flat band at the noise floor.  So this plot is both a
+        presentation of the signal and a go/no-go test for whether it decays.
+
+        The Hilbert envelope of a noisy narrowband signal is itself noisy, so it
+        is smoothed with a short moving-average (smooth_ms) — long enough to
+        ride over the ~0.4 ms Larmor period but far shorter than T2*, so the
+        decay is untouched.  The exponential fit skips the first fit_start_s of
+        the record because the Butterworth filter needs a few cycles to reach
+        steady state (its transient start-up would otherwise bias A upward).
+
+        Args:
+            file_name:   Output PNG path.
+            title:       Optional figure title.
+            log_scale:   If True, plot the envelope on a log Y axis instead of
+                         the ± waveform.  A single-exponential decay is a
+                         straight line on a log axis until it bends over into
+                         the horizontal noise floor C, which makes the
+                         exponential character (and the value of C) obvious.
+            smooth_ms:   Moving-average window for the envelope, in ms.
+            fit_start_s: Skip this much of the record before fitting, to avoid
+                         the filter's start-up transient.
+
+        Returns:
+            (A, T2, C) fit parameters as floats, or None if the fit failed.
+        """
+        sigd = self._signal_data
+        t = self._time
+
+        # Analytic-signal envelope = |signal + i·Hilbert(signal)|.  This is the
+        # instantaneous amplitude of the narrowband oscillation, independent of
+        # its phase, so it traces the FID decay directly.
+        envelope = np.abs(sig.hilbert(sigd))
+
+        # Smooth with a moving average whose length spans several Larmor cycles
+        # (so per-cycle ripple is averaged out) but a small fraction of T2*.
+        win = max(1, int(smooth_ms / 1000.0 * self._sample_rate))
+        smoothed = np.convolve(envelope, np.ones(win) / win, mode='same')
+
+        # Fit A·exp(−t/T2*) + C to the settled part of the envelope.
+        fit_params = None
+        fit_mask = t > fit_start_s
+        try:
+            def decay(tt, A, T2, C):
+                return A * np.exp(-tt / T2) + C
+
+            # Initial guess: amplitude from first-settled minus last sample,
+            # T2* ~ 1 s (typical for water), noise floor from the final value.
+            p0 = [smoothed[fit_mask][0] - smoothed[-1], 1.0, smoothed[-1]]
+            popt, _ = opt.curve_fit(decay, t[fit_mask], smoothed[fit_mask],
+                                    p0=p0, maxfev=10000)
+            fit_params = tuple(float(v) for v in popt)
+        except Exception:
+            # A flat or noise-only envelope may not fit an exponential; that is
+            # itself the "no decay" answer, so fail quietly and still draw the
+            # envelope so the flatness is visible.
+            popt = None
+
+        fig, ax = plt.subplots(figsize=(15, 5.5), dpi=100)
+
+        if log_scale:
+            # Log Y: a pure exponential is a straight line; the bend to the
+            # horizontal is where the signal reaches the noise floor C.
+            ax.semilogy(t, smoothed, color='#c0392b', lw=1.4,
+                        label="amplitude envelope (Hilbert)")
+            if popt is not None:
+                A, T2, C = popt
+                ax.semilogy(t[fit_mask], decay(t[fit_mask], *popt), 'k--',
+                            lw=1.5, label="exp fit:  T2* = {:.2f} s".format(T2))
+                ax.axhline(C, color='0.6', lw=0.8, ls=':',
+                           label="noise floor  C = {:.3f}".format(C))
+            ax.set_ylabel("Envelope amplitude (log)")
+        else:
+            # Linear: full waveform as a translucent band + envelope ± + fit ±.
+            ax.plot(t, sigd, lw=0.3, color='#4a7fb5', alpha=0.55,
+                    label="filtered signal")
+            ax.plot(t,  smoothed, color='#c0392b', lw=1.5,
+                    label="amplitude envelope (Hilbert)")
+            ax.plot(t, -smoothed, color='#c0392b', lw=1.5)
+            if popt is not None:
+                A, T2, C = popt
+                tf = np.linspace(t[fit_mask][0], t[-1], 400)
+                ax.plot(tf,  decay(tf, *popt), 'k--', lw=1.5,
+                        label="exp fit:  T2* = {:.2f} s".format(T2))
+                ax.plot(tf, -decay(tf, *popt), 'k--', lw=1.5)
+            ax.axhline(0, color='0.7', lw=0.6)
+            ax.set_ylabel("Amplitude")
+
+        ax.set_xlabel("Time since quench (s)")
+        ax.set_xlim(0, t[-1])
+        if title:
+            ax.set_title(title)
+        ax.legend(loc='upper right', fontsize=9)
+        fig.tight_layout()
+        fig.savefig(file_name)
+        plt.close(fig)   # release memory; important in multi-run loops
+        return fit_params
+
     # ── Filtering ─────────────────────────────────────────────────────────────
 
     def filterSignal(self, lower, upper, order=5):

@@ -277,5 +277,67 @@ class TestPlotSignal(unittest.TestCase):
             os.unlink(path)
 
 
+class TestPlotFilteredEnvelope(unittest.TestCase):
+
+    def _filtered_calc(self, **kw):
+        """A PPMCalc bandpassed around make_signal()'s 2800 Hz tone."""
+        signal = make_signal(**kw)
+        calc = PPMCalc.PPMCalc(SAMPLE_RATE, DURATION_MS, signal)
+        calc.filterSignal(2300, 3300)
+        return calc
+
+    def test_plot_file_written(self):
+        calc = self._filtered_calc()
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            path = tf.name
+        try:
+            calc.plotFilteredEnvelope(path)
+            self.assertTrue(os.path.getsize(path) > 0)
+        finally:
+            os.unlink(path)
+
+    def test_log_scale_file_written(self):
+        calc = self._filtered_calc()
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            path = tf.name
+        try:
+            calc.plotFilteredEnvelope(path, log_scale=True)
+            self.assertTrue(os.path.getsize(path) > 0)
+        finally:
+            os.unlink(path)
+
+    def test_recovers_decay_constant(self):
+        # make_signal() decays with T2 = 0.3 s (see its `decay` term); the
+        # exponential fit should recover that time constant.  Normalisation in
+        # the constructor scales amplitude but leaves the decay rate unchanged.
+        calc = self._filtered_calc()
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            path = tf.name
+        try:
+            params = calc.plotFilteredEnvelope(path)
+        finally:
+            os.unlink(path)
+        self.assertIsNotNone(params)
+        _A, T2, _C = params
+        self.assertAlmostEqual(T2, 0.3, delta=0.1)
+
+    def test_flat_signal_does_not_crash(self):
+        # A steady (non-decaying) tone may not admit an exponential fit; the
+        # method must still write the plot and simply return None or a fit,
+        # never raise — the flat envelope is itself the "no decay" answer.
+        n = int(SAMPLE_RATE * DURATION_MS / 1000)
+        t = np.arange(n)
+        tone = (np.sin(2 * np.pi * 2800 * t / SAMPLE_RATE) * 1000 + 2048).astype(int)
+        calc = PPMCalc.PPMCalc(SAMPLE_RATE, DURATION_MS, tone)
+        calc.filterSignal(2300, 3300)
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
+            path = tf.name
+        try:
+            calc.plotFilteredEnvelope(path)   # must not raise
+            self.assertTrue(os.path.getsize(path) > 0)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()
