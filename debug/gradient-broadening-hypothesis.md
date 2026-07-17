@@ -23,6 +23,20 @@ surviving hypothesis with a concrete, mostly-free test plan.
 > `Software/RPiPythonCode/data/groynes/` and the 2026-07-16 section of
 > `magnetometer-debug-notes.md`.
 >
+> **UPDATE 2026-07-17 — Test 1 (gradient survey) run; see §4 Test 1 RESULT.**
+> The home site's lower deck measures **5660 nT across 150 mm (37.7 nT/mm)** —
+> 19× the 300 nT threshold ⇒ ΔB ≈ 3200 nT across the bottle ⇒ **T2\* ≈ 2.3 ms**,
+> dead inside the 40 ms blind window. The null is now explained *quantitatively*
+> at the home site itself, not just by inference from the off-site success.
+> **But the killer looks like a discrete shallow object (~4–6 cm down — a deck
+> screw / bracket), not the basalt**: the anomaly is a 75 mm-wide +6 µT spike, not
+> a regional gradient. The broad +0.7–2.0 µT pedestal from the mass enclosed under
+> the deck (tank/pipework/rebar) is *nearly harmless* — a uniform offset shifts
+> the Larmor frequency but does not broaden the line. **So the lower deck may be
+> recoverable by moving ~150 mm, and "basalt" may be the wrong villain at home.**
+> Note the phone cannot clear any site: its drift floor (~830 nT / 30 s) is ~100×
+> the 7.5 nT that T2\*≈1 s requires — it can only *reject*.
+>
 > **What this settles and what remains.** The *instrument* is now proven
 > end-to-end — the design works. The open problem is no longer "is there a
 > signal" but "make it work AT HOME on basalt," which is a **gradient-mitigation**
@@ -141,6 +155,79 @@ Separately wave it near the platform hardware and the bottle cap.
 
 Caveat: phone resolution/noise ~0.1–0.6 µT — average readings, keep
 orientation fixed; it resolves the >300 nT threshold but not much below it.
+
+#### ✅ RESULT 2026-07-17 — lower deck FAILS by 19×; and the killer is a *discrete shallow object*, not the basalt
+
+Phone (Physics Toolbox) on a 1 m plywood batten, fixed N/S orientation, 150 mm
+traverse, 5 s dwells, two heights 100 mm apart. Lower deck (the historic
+measurement position) vs upper deck (+3.5 m). Data + analysis:
+`phone_magnetometer_data/` (`plot_gradient_survey.py` → `gradient_survey_2026-07-17.png`).
+
+| | lower deck | upper deck (+3.5 m) |
+|---|---|---|
+| |B| median | 58.95 µT | 56.65 µT |
+| spread across 150 mm | **5660 nT** | 1015 nT |
+| mean gradient | **37.7 nT/mm** | ≤ 6.8 nT/mm |
+| ΔB across the 85 mm bottle | **3207 nT** | ≤ 575 nT |
+| implied linewidth / T2\* | 137 Hz / **2.3 ms** | ≥ 24 Hz / ≤ 13 ms |
+| **phone's own drift floor** | 568 nT | 834 nT |
+| verdict | **REAL — 10× the floor** | **1.2× the floor — unresolvable** |
+
+**Lower deck: condemned.** 5660 nT is 19× the pre-registered 300 nT threshold and
+10× the phone's own drift, so it is unambiguously real. ΔB ≈ 3200 nT across the
+bottle ⇒ **T2\* ≈ 2.3 ms** — born and dead deep inside the ~40 ms blind window,
+with room to spare. This is a complete, quantitative explanation of the 2-month
+null and it lands exactly where §3's table predicted.
+
+**Upper deck: NOT exonerated — un-measured.** Its 1015 nT is only **1.2× the
+phone's own drift floor**, i.e. statistically indistinguishable from the phone
+lying motionless on a table. The §4 caveat above turns out to be *optimistic*
+over a traverse this long: while stationary the phone wanders 810–890 nT p2p and
+random-walks to ~830 nT over 28 s — ~100× the **7.5 nT** that the Groynes
+T2\*≈1 s actually implies. **The phone is a *reject* instrument, not an *accept*
+one.** It cannot clear any site, and no better phone protocol changes that.
+
+##### The lower-deck anomaly is TWO sources, and only one of them matters
+
+The traverse is not a smooth gradient — it is flat at 57.9 µT, steps to a 63.2 µT
+plateau, steps back to 59.1, settles at 58.4. Level-1 dwells at 0 / 75 / 150 mm,
+as anomaly above the 57.11 µT regional field: **+0.74 / +6.09 / +2.03 µT.**
+
+1. **A sharp SPIKE** — peak +6.1 µT, down 4.4× within 75 mm. Inverting the
+   falloff puts the source **~58 mm away if compact (1/r³), ~41 mm if a long
+   pipe/bar (1/r²)**. Either way it is *small and shallow* — a few cm under the
+   boards. A tank or rebar mesh cannot do this: it would give a broad flat-topped
+   anomaly metres wide, not a 75 mm-scale peak. §3 already notes *"a single steel
+   screw at 10 cm produces µT-scale ΔB"* — at ~5 cm, **a single deck screw, nail
+   plate, or joist bracket fully accounts for this spike.**
+2. **A broad PEDESTAL** — *every* lower-deck dwell sits +0.7 to +2.0 µT above
+   regional. *This* is the signature of the large hidden mass (old water tank /
+   pipework / rebar known to be enclosed under the wooden deck).
+
+**Crucially, the pedestal is nearly harmless.** A uniform offset shifts the Larmor
+frequency; it does not broaden the line. **Only the gradient broadens.** So the
+big buried tank is very likely *not* what has been killing the signal — the
+shallow spike is.
+
+**⇒ The lower deck may be recoverable without moving decks at all.** The spike is
+localized; the flat regions between dwells are at the phone's floor (i.e. also
+un-measured, not proven bad). **The open question is where the rig actually sat
+relative to the +6 µT spike** — if the sample has been sitting on top of a deck
+screw, moving 150 mm sideways (or pulling one screw) may be the entire fix. Worth
+5 minutes with the phone before hauling the rig upstairs.
+
+**Method note for any repeat — do NOT repeat the slow traverse.** A 30 s sweep is
+the *worst* use of this sensor: it accumulates the full random walk between first
+and last point. The drift scales as 90 nT @ 1 s → ~140–230 nT @ 3 s → ~570–830 nT
+@ 28 s. Use **rapid A/B/A/B swaps** (2 s per point, 8–10 repeats): each difference
+carries only ~125–195 nT of drift, and √N averaging gives **~40–60 nT** — a ~15×
+improvement, and the only phone protocol that clears 300 nT with confidence. It
+still tops out ~5× above the 7.5 nT budget, which is the point.
+
+*Data caveats:* the phone screensaver (~30 s timeout) truncated both logs — 4–5 of
+the planned 6 dwells survived in each, so the 100 mm vertical pair never got
+measured. Everything after each gap is at a different sensor attitude (phone
+picked up) and was discarded. Neither loss affects the verdicts above.
 
 ### Test 2 — Minimum-DELAY run (one config change) — ✅ RUN 2026-07-14; RESULT BELOW
 
