@@ -1,6 +1,7 @@
 *.png
 __pycache__
 PPMCoil.pdf
+signalsfromsubatomicworld.pdf
 digikey*order.csv
 DataSheets/
 *-backups/
