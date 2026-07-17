@@ -1452,15 +1452,20 @@ mechanism.
    recovery to ~ms lets a full-size, short-T2\* sample be seen *without* giving
    up signal — the complementary lever to the smaller sample. Details:
    `gradient-broadening-hypothesis.md` §4 Test 2b.
-3. **Static gradient survey (Test 1, still never done, now higher value).**
-   Phone magnetometer on a wooden stick, rig/battery moved away, map |B| over
-   ±15 cm at the sample position — **at BOTH home and the Groynes**. Confirms
-   the mechanism quantitatively (predict home ΔB ≳ 300 nT vs Groynes ≪ 100 nT)
-   and finds whether the worst gradient is geology or a rig-local ferrous part.
-4. **Remove rig-local ferrous** — steel bottle cap, battery position, platform
-   brackets; a single steel screw at 10 cm is µT-scale. Possibly the cheapest
-   home gain of all, and separable from geology by the survey (move the object,
-   re-read).
+3. **Static gradient survey (Test 1)** — ✅ **DONE 2026-07-17. Home lower deck
+   = 37.7 nT/mm ⇒ T2\* ≈ 2.3 ms. Prediction confirmed (ΔB ≳ 300 nT), 19× over.**
+   And it answered the "geology or ferrous part?" fork: **ferrous part.** The
+   anomaly is a 75 mm-wide **+6 µT spike from something small ~4–6 cm under the
+   deck boards**, not a regional gradient. See the 2026-07-17 section below and
+   `gradient-broadening-hypothesis.md` §4 Test 1 RESULT. *Still owed: the same
+   survey at the Groynes, for the ≪ 100 nT half of the comparison.*
+4. **Find the +6 µT object — PROMOTED to cheapest home gain, possibly decisive.**
+   §3 always flagged that *a single steel screw at 10 cm is µT-scale*; the survey
+   now says there is one at ~5 cm, right where measurements were taken. The
+   sample may literally have been sitting on a deck screw. The phone is the ideal
+   tool here (5.7 µT target vs 0.1 µT floor — no careful protocol needed, just
+   walk and watch the number). **Move 150 mm, or pull the screw, and re-read.**
+   Also still worth checking: steel bottle cap, battery position, brackets.
 5. **Shim** — only if 1–4 fall short: a first-order gradient coil or a
    permanent-magnet shim to cancel the local gradient. Advanced; last resort.
 
@@ -1485,3 +1490,84 @@ mechanism.
 *Immediate suggestion:* one more Groynes-class session to confirm repeatability
 and run the T1/on-time sweep, in parallel with the free home levers (small
 sample + de-ferrous the platform + gradient survey).
+
+---
+
+## 2026-07-17 — Test 1 gradient survey: the home null explained *at home*, and the villain is a screw, not the basalt
+
+Phone (Physics Toolbox) on a 1 m plywood batten, fixed N/S orientation, 150 mm
+traverse, 5 s dwells, two heights 100 mm apart. Lower deck (historic measurement
+position) vs upper deck (+3.5 m). Raw data, analysis script and figure:
+`phone_magnetometer_data/` → `plot_gradient_survey.py`,
+`gradient_survey_2026-07-17.png`. Full writeup:
+`gradient-broadening-hypothesis.md` §4 Test 1 RESULT.
+
+| | lower deck | upper deck (+3.5 m) |
+|---|---|---|
+| |B| median | 58.95 µT | 56.65 µT |
+| spread across 150 mm | **5660 nT** | 1015 nT |
+| mean gradient | **37.7 nT/mm** | ≤ 6.8 nT/mm |
+| ΔB across 85 mm bottle | **3207 nT** | ≤ 575 nT |
+| linewidth / T2\* | 137 Hz / **2.3 ms** | ≥ 24 Hz / ≤ 13 ms |
+| phone's own drift floor | 568 nT | 834 nT |
+| verdict | **REAL — 10× floor** | **1.2× floor — unresolvable** |
+
+### 1. The home null is now explained quantitatively, at home
+
+5660 nT is 19× the pre-registered 300 nT threshold and 10× the phone's own drift.
+ΔB ≈ 3200 nT across the bottle ⇒ **T2\* ≈ 2.3 ms** — born and dead deep inside the
+~40 ms blind window (2026-07-14). Until now the null was explained by *inference*
+from the Groynes success; it is now measured directly at the failing site, and it
+lands exactly where the hypothesis' §3 table predicted.
+
+### 2. The villain is a discrete shallow object, NOT the basalt
+
+The traverse is not a smooth gradient: flat 57.9 → **63.2 plateau** → 59.1 → 58.4.
+Level-1 dwells at 0/75/150 mm, above the 57.11 µT regional field:
+**+0.74 / +6.09 / +2.03 µT.** Inverting the falloff (4.4× down in 75 mm) puts the
+source **~58 mm away if compact (1/r³), ~41 mm if a pipe/bar (1/r²)** — small and
+shallow, a few cm under the boards. A tank or rebar mesh *cannot* produce a 75 mm
+-wide peak; it would give a broad flat-topped anomaly metres across.
+
+So there are **two** sources, and only one matters:
+
+- **The SPIKE** (+6 µT, ~5 cm down): consistent with **a single deck screw, nail
+  plate or joist bracket**. Gradient 37.7 nT/mm average — far worse at the peak.
+  **This is the killer.**
+- **The PEDESTAL** (+0.7–2.0 µT, broad — every lower-deck dwell sits above
+  regional): this is the large mass known to be enclosed under the wooden deck
+  (old water tank / pipework / rebar). **Nearly harmless** — a uniform offset
+  shifts the Larmor frequency but *does not broaden the line*. Only the gradient
+  broadens.
+
+**⇒ The lower deck may be recoverable without changing decks.** The spike is
+localized; the regions between dwells sit at the phone's floor (un-measured, not
+proven bad). **Key unknown: where did the rig actually sit relative to the spike?**
+If the sample has been on top of a deck screw, moving 150 mm may be the whole fix.
+
+### 3. The upper deck is NOT exonerated — it is un-measured
+
+Its 1015 nT is only **1.2× the phone's own drift floor**: indistinguishable from
+the phone lying motionless on a table. Test 1's resolution caveat proved
+*optimistic* over a 30 s traverse — while stationary the phone wanders 810–890 nT
+p2p and random-walks to ~830 nT over 28 s, i.e. **~100× the 7.5 nT that the
+Groynes T2\*≈1 s implies**. **The phone is a *reject* instrument, not an *accept*
+one.** It did its job by condemning the lower deck; it cannot clear anywhere.
+Only the PPM can. *Action: run the rig on the upper deck — it is the only
+instrument that can resolve the question, and it costs a session.*
+
+### 4. Method note — do NOT repeat the slow traverse
+
+A 30 s sweep is the worst possible use of this sensor: it accumulates the full
+random walk between first and last point. Measured drift scaling: **90 nT @ 1 s →
+~140–230 nT @ 3 s → ~570–830 nT @ 28 s.** Use **rapid A/B/A/B swaps** — 2 s per
+point, 8–10 repeats. Each difference carries only ~125–195 nT of drift, and √N
+averaging gives **~40–60 nT**: a ~15× improvement, and the only phone protocol
+that clears 300 nT with confidence. Even so it tops out ~5× above the 7.5 nT
+budget — which is exactly why no phone survey can green-light a site.
+
+*Data caveats:* the phone screensaver (~30 s timeout) truncated both logs at
+~28 s — 4–5 of the planned 6 dwells survived in each, so the 100 mm vertical pair
+never got measured. Post-gap samples are at a different sensor attitude (phone
+picked up) and were discarded. Neither loss affects the verdicts above; a repeat
+should use the A/B protocol in §4 rather than a fixed-screensaver traverse.
