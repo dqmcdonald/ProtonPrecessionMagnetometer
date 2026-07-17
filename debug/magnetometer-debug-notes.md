@@ -1454,9 +1454,10 @@ mechanism.
    `gradient-broadening-hypothesis.md` §4 Test 2b.
 3. **Static gradient survey (Test 1)** — ✅ **DONE 2026-07-17. Home lower deck
    = 37.7 nT/mm ⇒ T2\* ≈ 2.3 ms. Prediction confirmed (ΔB ≳ 300 nT), 19× over.**
-   And it answered the "geology or ferrous part?" fork: **ferrous part.** The
+   And it answered the "geology or ferrous part?" fork: **neither, quite** — the
    anomaly is a 75 mm-wide **+6 µT spike from something small ~4–6 cm under the
-   deck boards**, not a regional gradient. See the 2026-07-17 section below and
+   deck boards** (not regional geology, but not rig-local either: it does *not*
+   ride up with the sensor). See the 2026-07-17 section below and
    `gradient-broadening-hypothesis.md` §4 Test 1 RESULT. *Still owed: the same
    survey at the Groynes, for the ≪ 100 nT half of the comparison.*
 4. **Find the +6 µT object — PROMOTED to cheapest home gain, possibly decisive.**
@@ -1466,7 +1467,26 @@ mechanism.
    tool here (5.7 µT target vs 0.1 µT floor — no careful protocol needed, just
    walk and watch the number). **Move 150 mm, or pull the screw, and re-read.**
    Also still worth checking: steel bottle cap, battery position, brackets.
-5. **Shim** — only if 1–4 fall short: a first-order gradient coil or a
+5. **Raise the sensor off the ground** — Test 3 (the escape that worked) done
+   *vertically, in place*. Upward continuation low-passes the gradient: a
+   λ-wavelength component attenuates as exp(−2π·h/λ), so h ≈ 1 m knocks a
+   short-wavelength (few-metre) basalt anomaly down ~20× while a broad regional
+   one barely moves. Attacks the *ground* half only (rig-local ferrous rides up
+   with the sensor — that's #4's job). Unlike #1/#2 this lengthens T2\* by
+   shrinking the gradient rather than fighting the dead time. If adopted as an
+   operating parameter, log the height. Full rationale:
+   `gradient-broadening-hypothesis.md` §4 Test 3b.
+   **↑ MUCH more promising after Test 1 (2026-07-17) than the λ table suggests.**
+   That table was written for *distributed* basalt; the measured source is a
+   **compact object ~5 cm down**, which is the shortest-wavelength content there
+   is — precisely what height annihilates. As a dipole it falls as 1/(d+h)³, so
+   raising the sensor **0.3 m ⇒ ~350×** down, **1 m ⇒ ~10⁴×** down. Height beats
+   moving 150 mm sideways (~32×) for a source this shallow. *Correction to this
+   lever's "free test" claim:* Test 1's two-height pair was **never measured** —
+   the phone screensaver truncated both logs first. The lower-vs-upper-deck
+   comparison (Δh = 3.5 m, 5660 → 1015 nT) is a coarse stand-in and is consistent
+   with height helping, but it confounds height with location.
+6. **Shim** — only if 1–5 fall short: a first-order gradient coil or a
    permanent-magnet shim to cancel the local gradient. Advanced; last resort.
 
 ### C. Characterise the instrument (at a quiet site, now that there IS a signal)
